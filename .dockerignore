@@ -1,0 +1,11 @@
+node_modules
+.git
+.agents
+.cursor
+apps/web/src
+apps/web/public
+brightstar-auto-apply-bot
+sf-job-capture
+*.md
+apps/api/uploads
+apps/api/dist
