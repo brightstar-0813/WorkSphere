@@ -1,0 +1,18 @@
+{
+  "name": "worksphere",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @worksphere/api",
+    "dev:web": "npm run dev -w @worksphere/web",
+    "build": "npm run build -w @worksphere/api && npm run build -w @worksphere/web",
+    "db:up": "docker compose up -d db",
+    "db:migrate": "npm run db:migrate -w @worksphere/api",
+    "db:seed": "npm run db:seed -w @worksphere/api"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

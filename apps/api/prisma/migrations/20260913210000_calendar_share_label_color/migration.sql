@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "CalendarShare" ADD COLUMN "label" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "CalendarShare" ADD COLUMN "color" TEXT NOT NULL DEFAULT '#6366f1';

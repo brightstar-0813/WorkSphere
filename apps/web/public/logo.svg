@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="WorkSphere">
+  <defs>
+    <linearGradient id="wsBg" x1="18" y1="10" x2="110" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0E3D48"/>
+      <stop offset="0.5" stop-color="#0B6E6E"/>
+      <stop offset="1" stop-color="#085A5A"/>
+    </linearGradient>
+    <linearGradient id="wsArc" x1="28" y1="24" x2="100" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E8FFFB"/>
+      <stop offset="1" stop-color="#5EEAD4"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="32" fill="url(#wsBg)"/>
+  <!-- concentric sphere / W arcs -->
+  <path d="M34 78c8-28 22-46 30-46s22 18 30 46" stroke="url(#wsArc)" stroke-width="7.5" stroke-linecap="round" fill="none" opacity="0.35"/>
+  <path d="M40 74c7-22 18-36 24-36s17 14 24 36" stroke="url(#wsArc)" stroke-width="7.5" stroke-linecap="round" fill="none" opacity="0.55"/>
+  <path d="M46 70c5-16 12-26 18-26s13 10 18 26" stroke="url(#wsArc)" stroke-width="7.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M52 66c4-10 8-16 12-16s8 6 12 16" stroke="#F0FFFC" stroke-width="7.5" stroke-linecap="round" fill="none"/>
+  <circle cx="64" cy="50" r="5.5" fill="#F7FFFD"/>
+</svg>

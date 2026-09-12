@@ -1,0 +1,424 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum JobStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum BidStatus {
+  DRAFT
+  SENT
+  SHORTLISTED
+  REJECTED
+  WITHDRAWN
+  WON
+}
+
+enum BidSource {
+  MANUAL
+  SHEET
+}
+
+enum CapturedJobStatus {
+  NEW
+  QUEUED
+  DISMISSED
+  BIDDED
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+enum CalendarSourceType {
+  JOB
+  HUNTING
+  TRANSACTION
+  MANUAL
+  GOOGLE
+  OUTLOOK
+}
+
+enum CalendarProvider {
+  GOOGLE
+  OUTLOOK
+}
+
+enum CalendarShareStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum LinkedType {
+  JOB
+  HUNTING
+  TRANSACTION
+  NONE
+}
+
+enum JobDayItemStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  FAILED
+  BACKLOG
+  OVERDUE
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(USER)
+  locale       String   @default("en")
+  timeZone     String   @default("")
+  avatarUrl    String?
+  disabled     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  jobs          Job[]
+  huntingProfiles HuntingProfile[]
+  huntingBids     HuntingBid[]
+  huntingInterviews HuntingInterview[]
+  capturedJobs    CapturedJob[]
+  events        CalendarEvent[]
+  transactions  Transaction[]
+  discussions   Discussion[]
+  replies       DiscussionReply[]
+  jobDayLogs    JobDayLog[]
+  calendarConnections CalendarConnection[]
+  calendarIcsFeeds    CalendarIcsFeed[]
+  shareRequestsSent     CalendarShare[] @relation("ShareRequester")
+  shareRequestsReceived CalendarShare[] @relation("ShareOwner")
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  userId      String
+  title       String
+  status      JobStatus @default(TODO)
+  priority    Priority  @default(MEDIUM)
+  dueAt       DateTime?
+  description String    @default("")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dayLogs JobDayLog[]
+
+  @@index([userId])
+}
+
+model JobDayLog {
+  id        String   @id @default(cuid())
+  jobId     String
+  userId    String
+  day       DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  job   Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items JobDayItem[]
+
+  @@unique([jobId, day])
+  @@index([userId, day])
+}
+
+model JobDayItem {
+  id          String           @id @default(cuid())
+  logId       String
+  title       String
+  description String           @default("")
+  status      JobDayItemStatus @default(TODO)
+  sortOrder   Int              @default(0)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  log JobDayLog @relation(fields: [logId], references: [id], onDelete: Cascade)
+
+  @@index([logId, status])
+}
+
+model HuntingProfile {
+  id               String    @id @default(cuid())
+  userId           String
+  name             String
+  label            String    @default("")
+  active           Boolean   @default(true)
+  /** Google Spreadsheet URL or id (bid-bot compatible) */
+  spreadsheetUrl   String    @default("")
+  /** Apps Script Web App URL for append / list / markApplied */
+  sheetsWebAppUrl  String    @default("")
+  /** Tab name inside the spreadsheet (one tab per hunting profile) */
+  sheetTabName     String    @default("")
+  sheetSyncedAt    DateTime?
+  /** Local sf-job-capture API base, e.g. http://127.0.0.1:3847 */
+  captureBotUrl    String    @default("http://127.0.0.1:3847")
+  captureSyncedAt  DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bids         HuntingBid[]
+  interviews   HuntingInterview[]
+  capturedJobs CapturedJob[]
+
+  @@index([userId])
+}
+
+model CapturedJob {
+  id          String            @id @default(cuid())
+  userId      String
+  profileId   String
+  externalId  String?
+  platform    String            @default("")
+  title       String
+  company     String            @default("")
+  sourceUrl   String?
+  salary      String            @default("")
+  description String            @default("")
+  status      CapturedJobStatus @default(NEW)
+  payloadJson String            @default("")
+  capturedAt  DateTime          @default(now())
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile HuntingProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, externalId])
+  @@index([userId])
+  @@index([profileId, status])
+}
+
+model HuntingBid {
+  id          String    @id @default(cuid())
+  userId      String
+  profileId   String
+  company     String
+  roleTitle   String
+  status      BidStatus @default(DRAFT)
+  source      BidSource @default(MANUAL)
+  /** Normalized job link for sheet dedupe */
+  sheetKey    String?
+  sourceUrl   String?
+  salary      String    @default("")
+  notes       String    @default("")
+  amountMinor Int?
+  currency    String    @default("USD")
+  appliedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile    HuntingProfile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  interviews HuntingInterview[]
+
+  @@index([userId])
+  @@index([profileId])
+  @@index([profileId, sheetKey])
+}
+
+model HuntingInterview {
+  id             String          @id @default(cuid())
+  userId         String
+  profileId      String
+  bidId          String?
+  company        String
+  roleTitle      String
+  status         InterviewStatus @default(SCHEDULED)
+  notes          String          @default("")
+  scheduledAt    DateTime?
+  scheduleEndsAt DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile HuntingProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  bid     HuntingBid?    @relation(fields: [bidId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([profileId])
+  @@index([bidId])
+}
+
+model CalendarEvent {
+  id            String             @id @default(cuid())
+  userId        String
+  title         String
+  startsAt      DateTime
+  endsAt        DateTime?
+  allDay        Boolean            @default(false)
+  description   String             @default("")
+  tag           String             @default("SCHEDULE") // DEADLINE | SCHEDULE
+  remindMinutes Int                @default(30)
+  alertEnabled  Boolean            @default(true)
+  /** ONCE | DAILY | WEEKDAYS | WEEKLY | MONTHLY | CUSTOM */
+  recur         String             @default("ONCE")
+  /** Comma-separated JS weekdays (0=Sun…6=Sat); used when recur=CUSTOM */
+  recurDays     String             @default("")
+  recurUntil    DateTime?
+  sourceType    CalendarSourceType @default(MANUAL)
+  sourceId      String?
+  /** Mirrored external calendar event id */
+  externalId    String?
+  /** Comma-separated invitee emails */
+  attendees     String             @default("")
+  htmlLink      String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([startsAt])
+  @@index([userId, sourceType, sourceId])
+  @@unique([userId, sourceType, externalId])
+}
+
+model CalendarConnection {
+  id                 String           @id @default(cuid())
+  userId             String
+  provider           CalendarProvider
+  accountEmail       String
+  accessTokenEnc     String
+  refreshTokenEnc    String           @default("")
+  expiresAt          DateTime?
+  scope              String           @default("")
+  externalCalendarId String           @default("primary")
+  lastSyncAt         DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /** Multiple Gmail / Outlook accounts per user */
+  @@unique([userId, provider, accountEmail])
+  @@index([userId])
+  @@index([userId, provider])
+}
+
+/** Requester asks to view someone's calendar by email invite (accepted via inbox link + OAuth). */
+model CalendarShare {
+  id          String              @id @default(cuid())
+  requesterId String
+  /** Set when invitee accepts and links a calendar */
+  ownerId     String?
+  /** Invite target inbox (lowercase) */
+  ownerEmail  String
+  /** Secret token in the email Accept link */
+  inviteToken String              @unique @default(cuid())
+  status      CalendarShareStatus @default(PENDING)
+  /** Display name in the requester’s Calendars list */
+  label       String              @default("")
+  /** Layer color in the requester’s Calendars list */
+  color       String              @default("#6366f1")
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  respondedAt DateTime?
+  lastInvitedAt DateTime?
+
+  requester User  @relation("ShareRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  owner     User? @relation("ShareOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, ownerEmail])
+  @@index([ownerId, status])
+  @@index([ownerEmail, status])
+  @@index([requesterId, status])
+}
+
+/** Public Outlook (or other) ICS / webcal URL the user pastes in. */
+model CalendarIcsFeed {
+  id         String    @id @default(cuid())
+  userId     String
+  url        String
+  label      String    @default("Outlook")
+  color      String    @default("#6366f1")
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, url])
+  @@index([userId])
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  type        TxType
+  amountMinor Int
+  currency    String   @default("USD")
+  category    String
+  occurredAt  DateTime
+  note        String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([occurredAt])
+}
+
+model Discussion {
+  id         String     @id @default(cuid())
+  userId     String
+  title      String
+  body       String
+  linkedType LinkedType @default(NONE)
+  linkedId   String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replies DiscussionReply[]
+
+  @@index([userId])
+}
+
+model DiscussionReply {
+  id           String   @id @default(cuid())
+  discussionId String
+  authorId     String
+  body         String
+  createdAt    DateTime @default(now())
+
+  discussion Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+  author     User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([discussionId])
+}

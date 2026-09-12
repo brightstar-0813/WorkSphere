@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "CalendarEvent" ADD COLUMN     "tag" TEXT NOT NULL DEFAULT 'SCHEDULE';
