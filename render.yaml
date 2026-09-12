@@ -1,0 +1,24 @@
+# Render Blueprint — https://dashboard.render.com/select-repo?type=blueprint
+# Pair with a free Neon Postgres DATABASE_URL (set in the dashboard).
+
+services:
+  - type: web
+    name: worksphere-api
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: npm install && npm run build -w @worksphere/api
+    startCommand: npm run start:prod -w @worksphere/api
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: WEB_ORIGIN
+        sync: false
+      - key: API_PUBLIC_URL
+        sync: false
