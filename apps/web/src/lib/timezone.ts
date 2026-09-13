@@ -1,5 +1,10 @@
+/** Project default: Japan Standard Time (UTC+9). No DST. */
+export const DEFAULT_TIME_ZONE = "Asia/Tokyo";
+
 /** Curated IANA zones for the picker (offset label is computed live). */
 export const TIME_ZONE_OPTIONS: { id: string; label: string }[] = [
+  { id: "Asia/Tokyo", label: "Tokyo (UTC+9)" },
+  { id: "Asia/Seoul", label: "Seoul (UTC+9)" },
   { id: "Pacific/Honolulu", label: "Hawaii" },
   { id: "America/Anchorage", label: "Alaska" },
   { id: "America/Los_Angeles", label: "Pacific Time (US & Canada)" },
@@ -34,8 +39,6 @@ export const TIME_ZONE_OPTIONS: { id: string; label: string }[] = [
   { id: "Asia/Taipei", label: "Taipei" },
   { id: "Asia/Singapore", label: "Singapore" },
   { id: "Asia/Manila", label: "Manila" },
-  { id: "Asia/Seoul", label: "Seoul" },
-  { id: "Asia/Tokyo", label: "Tokyo" },
   { id: "Australia/Perth", label: "Perth" },
   { id: "Australia/Adelaide", label: "Adelaide" },
   { id: "Australia/Sydney", label: "Sydney" },
@@ -45,10 +48,19 @@ export const TIME_ZONE_OPTIONS: { id: string; label: string }[] = [
 
 export function detectTimeZone(): string {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (detected && isValidTimeZone(detected)) return detected;
   } catch {
-    return "UTC";
+    /* fall through */
   }
+  return DEFAULT_TIME_ZONE;
+}
+
+/** Prefer stored user zone; otherwise project default (UTC+9). */
+export function resolveAppTimeZone(stored?: string | null): string {
+  const tz = stored?.trim();
+  if (tz && isValidTimeZone(tz)) return tz;
+  return DEFAULT_TIME_ZONE;
 }
 
 export function isValidTimeZone(timeZone: string): boolean {

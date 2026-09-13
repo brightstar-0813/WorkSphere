@@ -59,6 +59,7 @@ const WINDOWS_TO_IANA: Record<string, string> = {
   "Morocco Standard Time": "Africa/Casablanca",
 };
 
+/** Default IANA zone when none is provided (UTC+9). */
 export function resolveIanaTimeZone(tzid: string | null | undefined): string | null {
   if (!tzid) return null;
   const cleaned = tzid.trim().replace(/^"|"$/g, "");

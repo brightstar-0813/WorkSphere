@@ -2,6 +2,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { endOfDay, startOfDay } from "../dateUtils.js";
+import { parseAnchorDate } from "../period.js";
+import { resolveActorTimeZone } from "../requestTimeZone.js";
 import { expandEventsInRange } from "../recur.js";
 
 function parseDay(raw: string) {
@@ -44,8 +46,10 @@ export function attachJobDailyRoutes(router: Router) {
       include: { items: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
     });
 
-    const dayStart = startOfDay(new Date(`${dayRaw}T12:00:00`));
-    const dayEnd = endOfDay(new Date(`${dayRaw}T12:00:00`));
+    const timeZone = await resolveActorTimeZone(req, job.userId);
+    const civil = parseAnchorDate(dayRaw, timeZone);
+    const dayStart = startOfDay(civil, timeZone);
+    const dayEnd = endOfDay(civil, timeZone);
 
     const stored = await prisma.calendarEvent.findMany({
       where: {
