@@ -108,10 +108,40 @@ export function DiscussPage() {
   const [confirmAction, setConfirmAction] = useState<"clear" | "remove" | null>(null);
 
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const stickBottomRef = useRef(true);
   const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingIdleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeIdRef = useRef<string | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [unseenCount, setUnseenCount] = useState(0);
+
+  const scrollElToEnd = useCallback((behavior: ScrollBehavior = "auto") => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const run = () => {
+      if (bottomRef.current) {
+        bottomRef.current.scrollIntoView({ block: "end", behavior });
+      } else {
+        el.scrollTo({ top: el.scrollHeight, behavior });
+      }
+    };
+    run();
+    requestAnimationFrame(() => {
+      run();
+      requestAnimationFrame(run);
+    });
+  }, []);
+
+  const jumpToLatest = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      stickBottomRef.current = true;
+      setAtBottom(true);
+      setUnseenCount(0);
+      scrollElToEnd(behavior);
+    },
+    [scrollElToEnd],
+  );
 
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -196,6 +226,9 @@ export function DiscussPage() {
         return;
       }
       setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      if (!stickBottomRef.current && msg.author.id !== user?.id) {
+        setUnseenCount((n) => n + 1);
+      }
       setRooms((prev) =>
         prev.map((r) =>
           r.id === msg.roomId
@@ -280,6 +313,8 @@ export function DiscussPage() {
       setMessages([]);
       setPresence([]);
       setTypingNames([]);
+      setUnseenCount(0);
+      setAtBottom(true);
       return;
     }
 
@@ -290,12 +325,14 @@ export function DiscussPage() {
       setLoadingMessages(true);
       setError(null);
       setTypingNames([]);
+      setUnseenCount(0);
+      stickBottomRef.current = true;
+      setAtBottom(true);
       try {
         const { data, meta } = await apiList<ChatMessage[]>(`/chat/rooms/${roomId}/messages?limit=50`);
         if (cancelled) return;
         setMessages(data);
         setHasMore(Boolean(meta.hasMore));
-        stickBottomRef.current = true;
 
         const join = await joinChannel(roomId);
         if (!cancelled && join.users) setPresence(join.users);
@@ -315,16 +352,18 @@ export function DiscussPage() {
   }, [activeId, t]);
 
   useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (!el || !stickBottomRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages, typingNames, loadingMessages]);
+    if (!stickBottomRef.current || loadingMessages) return;
+    scrollElToEnd("auto");
+  }, [messages, typingNames, loadingMessages, activeId, scrollElToEnd]);
 
   function onScroll() {
     const el = scrollerRef.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickBottomRef.current = distance < 64;
+    const nearBottom = distance < 80;
+    stickBottomRef.current = nearBottom;
+    setAtBottom(nearBottom);
+    if (nearBottom) setUnseenCount(0);
   }
 
   async function loadOlder() {
@@ -458,7 +497,10 @@ export function DiscussPage() {
       return;
     }
     stickBottomRef.current = true;
+    setAtBottom(true);
+    setUnseenCount(0);
     setMessages((prev) => (prev.some((m) => m.id === result.data.id) ? prev : [...prev, result.data]));
+    requestAnimationFrame(() => scrollElToEnd("smooth"));
   }
 
   return (
@@ -592,74 +634,89 @@ export function DiscussPage() {
                 </div>
               </header>
 
-              <div className="discuss-stream" ref={scrollerRef} onScroll={onScroll}>
-                {hasMore && (
-                  <button
-                    type="button"
-                    className="btn discuss-load-older"
-                    disabled={loadingOlder}
-                    onClick={() => void loadOlder()}
-                  >
-                    {loadingOlder ? t("common.loading") : t("discuss.loadOlder")}
-                  </button>
-                )}
+              <div className="discuss-stream-wrap">
+                <div className="discuss-stream" ref={scrollerRef} onScroll={onScroll}>
+                  {hasMore && (
+                    <button
+                      type="button"
+                      className="btn discuss-load-older"
+                      disabled={loadingOlder}
+                      onClick={() => void loadOlder()}
+                    >
+                      {loadingOlder ? t("common.loading") : t("discuss.loadOlder")}
+                    </button>
+                  )}
 
-                {loadingMessages && <p className="muted discuss-stream-status">{t("common.loading")}</p>}
+                  {loadingMessages && <p className="muted discuss-stream-status">{t("common.loading")}</p>}
 
-                {!loadingMessages && messages.length === 0 && (
-                  <p className="muted discuss-stream-status">{t("discuss.startConversation")}</p>
-                )}
+                  {!loadingMessages && messages.length === 0 && (
+                    <p className="muted discuss-stream-status">{t("discuss.startConversation")}</p>
+                  )}
 
-                {messages.map((msg, idx) => {
-                  const mine = msg.author.id === user?.id;
-                  const prev = messages[idx - 1];
-                  const showDay = !prev || !sameDay(prev.createdAt, msg.createdAt);
-                  const stack =
-                    prev &&
-                    prev.author.id === msg.author.id &&
-                    !showDay &&
-                    new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < 120_000;
+                  {messages.map((msg, idx) => {
+                    const mine = msg.author.id === user?.id;
+                    const prev = messages[idx - 1];
+                    const showDay = !prev || !sameDay(prev.createdAt, msg.createdAt);
+                    const stack =
+                      prev &&
+                      prev.author.id === msg.author.id &&
+                      !showDay &&
+                      new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < 120_000;
 
-                  return (
-                    <div key={msg.id}>
-                      {showDay && (
-                        <div className="discuss-day">
-                          <span>{formatDay(msg.createdAt, i18n.language)}</span>
-                        </div>
-                      )}
-                      <article
-                        className={`discuss-msg ${mine ? "mine" : ""} ${stack ? "stack" : ""}`}
-                      >
-                        {!mine && !stack && (
-                          <div className="discuss-avatar lg" aria-hidden>
-                            {msg.author.avatarUrl ? (
-                              <img src={mediaUrl(msg.author.avatarUrl)} alt="" />
-                            ) : (
-                              initialsOf(msg.author.name)
-                            )}
+                    return (
+                      <div key={msg.id}>
+                        {showDay && (
+                          <div className="discuss-day">
+                            <span>{formatDay(msg.createdAt, i18n.language)}</span>
                           </div>
                         )}
-                        {!mine && stack && <div className="discuss-avatar-spacer" />}
-                        <div className="discuss-bubble">
+                        <article
+                          className={`discuss-msg ${mine ? "mine" : ""} ${stack ? "stack" : ""}`}
+                        >
                           {!mine && !stack && (
-                            <header>
-                              <strong>{msg.author.name}</strong>
+                            <div className="discuss-avatar lg" aria-hidden>
+                              {msg.author.avatarUrl ? (
+                                <img src={mediaUrl(msg.author.avatarUrl)} alt="" />
+                              ) : (
+                                initialsOf(msg.author.name)
+                              )}
+                            </div>
+                          )}
+                          {!mine && stack && <div className="discuss-avatar-spacer" />}
+                          <div className="discuss-bubble">
+                            {!mine && !stack && (
+                              <header>
+                                <strong>{msg.author.name}</strong>
+                                <time dateTime={msg.createdAt}>
+                                  {formatClock(msg.createdAt, i18n.language)}
+                                </time>
+                              </header>
+                            )}
+                            <p>{msg.body}</p>
+                            {(mine || stack) && (
                               <time dateTime={msg.createdAt}>
                                 {formatClock(msg.createdAt, i18n.language)}
                               </time>
-                            </header>
-                          )}
-                          <p>{msg.body}</p>
-                          {(mine || stack) && (
-                            <time dateTime={msg.createdAt}>
-                              {formatClock(msg.createdAt, i18n.language)}
-                            </time>
-                          )}
-                        </div>
-                      </article>
-                    </div>
-                  );
-                })}
+                            )}
+                          </div>
+                        </article>
+                      </div>
+                    );
+                  })}
+                  <div ref={bottomRef} className="discuss-stream-end" aria-hidden />
+                </div>
+
+                {!atBottom && (
+                  <button
+                    type="button"
+                    className="discuss-jump-latest"
+                    onClick={() => jumpToLatest("smooth")}
+                  >
+                    {unseenCount > 0
+                      ? t("discuss.newMessages", { count: unseenCount })
+                      : t("discuss.jumpLatest")}
+                  </button>
+                )}
               </div>
 
               <div className="discuss-typing" aria-live="polite">
