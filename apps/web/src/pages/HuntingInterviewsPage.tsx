@@ -9,8 +9,11 @@ import {
 } from "../components/HuntingProfileSwitcher";
 import { Pagination } from "../components/Pagination";
 import { PeriodToolbar, toDateKey, type PeriodType } from "../components/PeriodToolbar";
+import { RowSelectCheckbox } from "../components/RowSelectCheckbox";
+import { SelectionBar } from "../components/SelectionBar";
 import { SchedulePanel } from "../components/SchedulePanel";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
+import { useRowSelection } from "../hooks/useRowSelection";
 import { fromLocalInput } from "../lib/datetime";
 
 const INTERVIEW_STATUSES = ["SCHEDULED", "COMPLETED", "CANCELLED", "NO_SHOW"] as const;
@@ -53,6 +56,7 @@ export function HuntingInterviewsPage() {
   const [syncing, setSyncing] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   const [createProfileId, setCreateProfileId] = useState("");
@@ -173,12 +177,36 @@ export function HuntingInterviewsPage() {
       await api(`/hunting/interviews/${id}`, { method: "DELETE" });
       if (expanded === id) setExpanded(null);
       setDeleteId(null);
+      selection.clear();
       if (items.length === 1 && page > 1) setPage((p) => p - 1);
       else setReloadToken((n) => n + 1);
     } finally {
       setSaving(false);
     }
   }
+
+  async function removeSelected() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    setSaving(true);
+    try {
+      await Promise.all(ids.map((id) => api(`/hunting/interviews/${id}`, { method: "DELETE" })));
+      if (expanded && ids.includes(expanded)) setExpanded(null);
+      setConfirmBulkDelete(false);
+      selection.clear();
+      const remaining = items.length - ids.length;
+      if (remaining <= 0 && page > 1) setPage((p) => p - 1);
+      else setReloadToken((n) => n + 1);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const selectableIds = useMemo(
+    () => items.filter((h) => !(h.readOnly || h.source === "ICS")).map((h) => h.id),
+    [items],
+  );
+  const selection = useRowSelection(selectableIds);
 
   async function syncLinkedCalendar() {
     if (!linkedFeedId) return;
@@ -395,19 +423,43 @@ export function HuntingInterviewsPage() {
                 <p>{t("hunting.interviews.empty")}</p>
               </div>
             )}
+            {!loading && selectableIds.length > 0 ? (
+              <SelectionBar
+                selection={selection}
+                pageIds={selectableIds}
+                disabled={loading}
+                deleteBusy={saving}
+                onDeleteSelected={() => setConfirmBulkDelete(true)}
+              />
+            ) : null}
             {!loading &&
               items.map((h) => {
                 const readOnly = Boolean(h.readOnly || h.source === "ICS");
                 return (
-                  <article key={h.id} className="panel hunting-card">
+                  <article
+                    key={h.id}
+                    className={`panel hunting-card${
+                      selection.isSelected(h.id) ? " is-selected" : ""
+                    }`}
+                  >
                     <div className="hunting-card-main">
+                      {!readOnly ? (
+                        <RowSelectCheckbox
+                          checked={selection.isSelected(h.id)}
+                          onChange={() => selection.toggle(h.id)}
+                          label={t("common.selectRow")}
+                          disabled={saving || loading}
+                        />
+                      ) : (
+                        <span className="row-select row-select-spacer" aria-hidden />
+                      )}
                       <div className="hunting-card-copy">
                         <div className="hunting-card-title-row">
                           <h3 translate="no">
                             {h.company}
                             {h.roleTitle && h.source !== "ICS" ? (
                               <>
-                                <span className="hunting-card-sep">â€”</span>
+                                <span className="hunting-card-sep">—</span>
                                 {h.roleTitle}
                               </>
                             ) : null}
@@ -519,6 +571,16 @@ export function HuntingInterviewsPage() {
           if (deleteId) void remove(deleteId);
         }}
         onCancel={() => setDeleteId(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("common.deleteSelectedTitle")}
+        body={t("common.confirmDeleteSelected", { count: selection.selectedCount })}
+        danger
+        busy={saving}
+        onConfirm={() => void removeSelected()}
+        onCancel={() => setConfirmBulkDelete(false)}
       />
     </section>
   );

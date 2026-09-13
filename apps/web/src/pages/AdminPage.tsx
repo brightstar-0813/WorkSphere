@@ -16,8 +16,11 @@ import {
   toDateKey,
   type PeriodType,
 } from "../components/PeriodToolbar";
+import { RowSelectCheckbox } from "../components/RowSelectCheckbox";
+import { SelectionBar } from "../components/SelectionBar";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
 import { mediaUrl } from "../config";
+import { useRowSelection } from "../hooks/useRowSelection";
 import { addAmountMinor, buildProfileRegionLines } from "../lib/bidAmounts";
 import {
   addDays,
@@ -276,6 +279,7 @@ export function AdminPage() {
   const [error, setError] = useState("");
   const [deleteUser, setDeleteUser] = useState<UserRow | null>(null);
   const [deleteTx, setDeleteTx] = useState<AdminTx | null>(null);
+  const [confirmBulkDeleteTx, setConfirmBulkDeleteTx] = useState(false);
   const [create, setCreate] = useState(emptyCreate);
   const [editId, setEditId] = useState<string | null>(null);
   const [edit, setEdit] = useState({
@@ -310,6 +314,8 @@ export function AdminPage() {
     () => periodLabel(period, periodAnchor, i18n.language, timeZone),
     [period, periodAnchor, i18n.language, timeZone],
   );
+  const txPageIds = useMemo(() => transactions.map((tx) => tx.id), [transactions]);
+  const txSelection = useRowSelection(txPageIds);
 
   const periodQuery = useCallback(() => {
     const params = new URLSearchParams({ period, date: anchorKey });
@@ -693,6 +699,7 @@ export function AdminPage() {
       await api(`/transactions/${tx.id}`, { method: "DELETE" });
       if (editTxId === tx.id) setEditTxId(null);
       setDeleteTx(null);
+      txSelection.clear();
       await loadTransactions();
       notify({
         title: t("money.toastDeletedTitle"),
@@ -700,6 +707,30 @@ export function AdminPage() {
           amount: formatMoney(tx.amountMinor, tx.currency, i18n.language),
           category: tx.category,
         }),
+        tone: "success",
+        sourceType: "TRANSACTION",
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common.error"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDeleteSelectedTx() {
+    const ids = txSelection.selectedIds;
+    if (ids.length === 0) return;
+    setBusy(true);
+    setError("");
+    try {
+      await Promise.all(ids.map((id) => api(`/transactions/${id}`, { method: "DELETE" })));
+      if (editTxId && ids.includes(editTxId)) setEditTxId(null);
+      setConfirmBulkDeleteTx(false);
+      txSelection.clear();
+      await loadTransactions();
+      notify({
+        title: t("money.toastDeletedTitle"),
+        body: t("common.selectedCount", { count: ids.length }),
         tone: "success",
         sourceType: "TRANSACTION",
       });
@@ -1903,10 +1934,30 @@ export function AdminPage() {
               onSelectUser={(userId) => setFilterUserId(userId)}
             />
           )}
+          {transactions.length > 0 ? (
+            <SelectionBar
+              selection={txSelection}
+              pageIds={txPageIds}
+              disabled={busy}
+              deleteBusy={busy}
+              onDeleteSelected={() => setConfirmBulkDeleteTx(true)}
+            />
+          ) : null}
           <div className="admin-table-wrap">
             <table className="admin-table">
               <thead>
                 <tr>
+                  <th className="row-select-col">
+                    <RowSelectCheckbox
+                      checked={txSelection.allSelected}
+                      indeterminate={txSelection.someSelected}
+                      onChange={txSelection.toggleAll}
+                      label={
+                        txSelection.allSelected ? t("common.selectNone") : t("common.selectAll")
+                      }
+                      disabled={busy || transactions.length === 0}
+                    />
+                  </th>
                   <th>{t("common.type")}</th>
                   <th>{t("common.category")}</th>
                   <th>{t("admin.owner")}</th>
@@ -1919,7 +1970,15 @@ export function AdminPage() {
               <tbody>
                 {transactions.map((tx) => (
                   <Fragment key={tx.id}>
-                    <tr>
+                    <tr className={txSelection.isSelected(tx.id) ? "is-selected" : undefined}>
+                      <td className="row-select-col">
+                        <RowSelectCheckbox
+                          checked={txSelection.isSelected(tx.id)}
+                          onChange={() => txSelection.toggle(tx.id)}
+                          label={t("common.selectRow")}
+                          disabled={busy}
+                        />
+                      </td>
                       <td>
                         <StatusBadge tone={tx.type === "INCOME" ? "success" : "danger"}>
                           {tx.type}
@@ -1960,7 +2019,7 @@ export function AdminPage() {
                     </tr>
                     {editTxId === tx.id && (
                       <tr>
-                        <td colSpan={7}>
+                        <td colSpan={8}>
                           <form
                             className="admin-edit-form stack"
                             onSubmit={(e) => void onSaveEditTx(e)}
@@ -2094,6 +2153,18 @@ export function AdminPage() {
         }}
         onCancel={() => {
           if (!busy) setDeleteTx(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDeleteTx}
+        title={t("common.deleteSelectedTitle")}
+        body={t("common.confirmDeleteSelected", { count: txSelection.selectedCount })}
+        danger
+        busy={busy}
+        onConfirm={() => void onDeleteSelectedTx()}
+        onCancel={() => {
+          if (!busy) setConfirmBulkDeleteTx(false);
         }}
       />
     </section>

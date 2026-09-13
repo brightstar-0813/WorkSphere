@@ -9,7 +9,10 @@ import {
   isSpecialProfileId,
 } from "../components/HuntingProfileSwitcher";
 import { Pagination } from "../components/Pagination";
+import { RowSelectCheckbox } from "../components/RowSelectCheckbox";
+import { SelectionBar } from "../components/SelectionBar";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
+import { useRowSelection } from "../hooks/useRowSelection";
 import { fromLocalInput, toLocalInput } from "../lib/datetime";
 import { resolveAppTimeZone, toZonedInput, fromZonedInput } from "../lib/timezone";
 
@@ -84,6 +87,7 @@ export function HuntingProgressPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(() => emptyDraft([], []));
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [optionKind, setOptionKind] = useState<"STEP" | "STATUS">("STEP");
@@ -95,6 +99,8 @@ export function HuntingProgressPage() {
 
   const allProfiles = isAllProfilesId(profileId);
   const canAttachProfile = profileId && !isSpecialProfileId(profileId);
+  const pageIds = useMemo(() => items.map((row) => row.id), [items]);
+  const selection = useRowSelection(pageIds);
 
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -218,8 +224,26 @@ export function HuntingProgressPage() {
     try {
       await api(`/hunting/progress/${id}`, { method: "DELETE" });
       setDeleteId(null);
+      selection.clear();
       if (editingId === id) setEditingId(null);
       if (items.length === 1 && page > 1) setPage((p) => p - 1);
+      else setReloadToken((n) => n + 1);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeSelected() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    setSaving(true);
+    try {
+      await Promise.all(ids.map((id) => api(`/hunting/progress/${id}`, { method: "DELETE" })));
+      setConfirmBulkDelete(false);
+      selection.clear();
+      if (editingId && ids.includes(editingId)) setEditingId(null);
+      const remaining = items.length - ids.length;
+      if (remaining <= 0 && page > 1) setPage((p) => p - 1);
       else setReloadToken((n) => n + 1);
     } finally {
       setSaving(false);
@@ -660,11 +684,29 @@ export function HuntingProgressPage() {
                 <p>{t("hunting.progress.empty")}</p>
               </div>
             )}
+            {!loading && items.length > 0 ? (
+              <SelectionBar
+                selection={selection}
+                pageIds={pageIds}
+                disabled={loading}
+                deleteBusy={saving}
+                onDeleteSelected={() => setConfirmBulkDelete(true)}
+              />
+            ) : null}
             {!loading &&
               viewMode === "list" &&
               items.map((row) => (
-                <article key={row.id} className="panel hunting-card">
+                <article
+                  key={row.id}
+                  className={`panel hunting-card${selection.isSelected(row.id) ? " is-selected" : ""}`}
+                >
                   <div className="hunting-card-main">
+                    <RowSelectCheckbox
+                      checked={selection.isSelected(row.id)}
+                      onChange={() => selection.toggle(row.id)}
+                      label={t("common.selectRow")}
+                      disabled={saving || loading}
+                    />
                     <div className="hunting-card-copy">
                       <div className="hunting-card-title-row">
                         <h3 translate="no">
@@ -744,8 +786,19 @@ export function HuntingProgressPage() {
               items.map((row) => {
                 const knownStep = steps.some((s) => s.label === row.step);
                 return (
-                  <article key={row.id} className="panel hunting-card progress-flow-card">
+                  <article
+                    key={row.id}
+                    className={`panel hunting-card progress-flow-card${
+                      selection.isSelected(row.id) ? " is-selected" : ""
+                    }`}
+                  >
                     <div className="progress-flow-head">
+                      <RowSelectCheckbox
+                        checked={selection.isSelected(row.id)}
+                        onChange={() => selection.toggle(row.id)}
+                        label={t("common.selectRow")}
+                        disabled={saving || loading}
+                      />
                       <div className="hunting-card-copy">
                         <div className="hunting-card-title-row">
                           <h3 translate="no">
@@ -872,6 +925,15 @@ export function HuntingProgressPage() {
           if (deleteId) void remove(deleteId);
         }}
         onCancel={() => setDeleteId(null)}
+      />
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("common.deleteSelectedTitle")}
+        body={t("common.confirmDeleteSelected", { count: selection.selectedCount })}
+        danger
+        busy={saving}
+        onConfirm={() => void removeSelected()}
+        onCancel={() => setConfirmBulkDelete(false)}
       />
       <ConfirmDialog
         open={deleteOptionId != null}

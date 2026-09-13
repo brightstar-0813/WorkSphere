@@ -102,7 +102,16 @@
     "next": "下一页",
     "pagination": "分页",
     "pageOf": "第 {{page}} / {{totalPages}} 页",
-    "pageRange": "第 {{from}}–{{to}} 条，共 {{total}} 条"
+    "pageRange": "第 {{from}}–{{to}} 条，共 {{total}} 条",
+    "selection": "行选择",
+    "selectAll": "全选",
+    "selectNone": "取消本页选择",
+    "selectRow": "选择此行",
+    "clearSelection": "清除",
+    "selectedCount": "已选 {{count}} 项",
+    "deleteSelected": "删除所选",
+    "confirmDeleteSelected": "确定删除所选的 {{count}} 项？此操作无法撤销。",
+    "deleteSelectedTitle": "删除所选？"
   },
   "jobs": {
     "heading": "工作管理",

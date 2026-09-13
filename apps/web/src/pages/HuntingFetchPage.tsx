@@ -9,6 +9,9 @@ import {
   type HuntingProfile,
 } from "../components/HuntingProfileSwitcher";
 import { Pagination } from "../components/Pagination";
+import { RowSelectCheckbox } from "../components/RowSelectCheckbox";
+import { SelectionBar } from "../components/SelectionBar";
+import { useRowSelection } from "../hooks/useRowSelection";
 
 const PAGE_SIZE = 10;
 const DOMAIN_LIST_ID = "hunting-fetch-domains";
@@ -62,7 +65,11 @@ export function HuntingFetchPage() {
   const [loading, setLoading] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [confirmDeleteDomain, setConfirmDeleteDomain] = useState(false);
+
+  const pageIds = useMemo(() => items.map((j) => j.id), [items]);
+  const selection = useRowSelection(pageIds);
 
   const domainById = useMemo(
     () => Object.fromEntries(profiles.map((p) => [p.id, p.name])),
@@ -308,6 +315,24 @@ export function HuntingFetchPage() {
     try {
       await api(`/hunting/fetch/${id}`, { method: "DELETE" });
       setDeleteJobId(null);
+      selection.clear();
+      setReloadToken((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common.error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeSelectedJobs() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    setSaving(true);
+    setError("");
+    try {
+      await Promise.all(ids.map((id) => api(`/hunting/fetch/${id}`, { method: "DELETE" })));
+      setConfirmBulkDelete(false);
+      selection.clear();
       setReloadToken((n) => n + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common.error"));
@@ -485,66 +510,99 @@ export function HuntingFetchPage() {
         ) : items.length === 0 ? (
           <p className="muted">{t("hunting.fetch.empty")}</p>
         ) : (
-          <div className="admin-table-wrap">
-            <table className="admin-table hunting-fetch-table">
-              <thead>
-                <tr>
-                  <th>{t("hunting.fetch.domain")}</th>
-                  <th>{t("hunting.fetch.title")}</th>
-                  <th>{t("common.company")}</th>
-                  <th>{t("hunting.fetch.link")}</th>
-                  <th>{t("hunting.fetch.salary")}</th>
-                  <th>{t("hunting.fetch.jd")}</th>
-                  <th>{t("hunting.fetch.postedAt")}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((job) => (
-                  <tr key={job.id}>
-                    <td translate="no">{domainById[job.profileId] || "—"}</td>
-                    <td>
-                      <strong>{job.title}</strong>
-                    </td>
-                    <td>{job.company || "—"}</td>
-                    <td>
-                      {job.sourceUrl ? (
-                        <a
-                          className="hunting-meta-link"
-                          href={job.sourceUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {t("hunting.fetch.openLink")}
-                        </a>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>{job.salary || "—"}</td>
-                    <td className="hunting-fetch-jd" title={job.description || undefined}>
-                      {job.description ? truncate(job.description) : "—"}
-                    </td>
-                    <td className="tabular muted">
-                      <div>{new Date(job.capturedAt).toLocaleDateString(i18n.language)}</div>
-                      {job.user?.name ? (
-                        <div className="small">{t("hunting.fetch.postedBy", { name: job.user.name })}</div>
-                      ) : null}
-                    </td>
-                    <td className="hunting-fetch-actions">
-                      <button
-                        type="button"
-                        className="btn ghost"
-                        onClick={() => setDeleteJobId(job.id)}
-                      >
-                        {t("common.delete")}
-                      </button>
-                    </td>
+          <>
+            <SelectionBar
+              selection={selection}
+              pageIds={pageIds}
+              disabled={loading}
+              deleteBusy={saving}
+              onDeleteSelected={() => setConfirmBulkDelete(true)}
+            />
+            <div className="admin-table-wrap">
+              <table className="admin-table hunting-fetch-table">
+                <thead>
+                  <tr>
+                    <th className="row-select-col">
+                      <RowSelectCheckbox
+                        checked={selection.allSelected}
+                        indeterminate={selection.someSelected}
+                        onChange={selection.toggleAll}
+                        label={
+                          selection.allSelected ? t("common.selectNone") : t("common.selectAll")
+                        }
+                        disabled={loading || saving}
+                      />
+                    </th>
+                    <th>{t("hunting.fetch.domain")}</th>
+                    <th>{t("hunting.fetch.title")}</th>
+                    <th>{t("common.company")}</th>
+                    <th>{t("hunting.fetch.link")}</th>
+                    <th>{t("hunting.fetch.salary")}</th>
+                    <th>{t("hunting.fetch.jd")}</th>
+                    <th>{t("hunting.fetch.postedAt")}</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((job) => (
+                    <tr
+                      key={job.id}
+                      className={selection.isSelected(job.id) ? "is-selected" : undefined}
+                    >
+                      <td className="row-select-col">
+                        <RowSelectCheckbox
+                          checked={selection.isSelected(job.id)}
+                          onChange={() => selection.toggle(job.id)}
+                          label={t("common.selectRow")}
+                          disabled={loading || saving}
+                        />
+                      </td>
+                      <td translate="no">{domainById[job.profileId] || "—"}</td>
+                      <td>
+                        <strong>{job.title}</strong>
+                      </td>
+                      <td>{job.company || "—"}</td>
+                      <td>
+                        {job.sourceUrl ? (
+                          <a
+                            className="hunting-meta-link"
+                            href={job.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {t("hunting.fetch.openLink")}
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>{job.salary || "—"}</td>
+                      <td className="hunting-fetch-jd" title={job.description || undefined}>
+                        {job.description ? truncate(job.description) : "—"}
+                      </td>
+                      <td className="tabular muted">
+                        <div>{new Date(job.capturedAt).toLocaleDateString(i18n.language)}</div>
+                        {job.user?.name ? (
+                          <div className="small">
+                            {t("hunting.fetch.postedBy", { name: job.user.name })}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="hunting-fetch-actions">
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          onClick={() => setDeleteJobId(job.id)}
+                        >
+                          {t("common.delete")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         <Pagination
@@ -567,6 +625,16 @@ export function HuntingFetchPage() {
           if (deleteJobId) void removeJob(deleteJobId);
         }}
         onCancel={() => setDeleteJobId(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("common.deleteSelectedTitle")}
+        body={t("common.confirmDeleteSelected", { count: selection.selectedCount })}
+        danger
+        busy={saving}
+        onConfirm={() => void removeSelectedJobs()}
+        onCancel={() => setConfirmBulkDelete(false)}
       />
 
       <ConfirmDialog

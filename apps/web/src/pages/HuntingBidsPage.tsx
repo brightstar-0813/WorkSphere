@@ -9,7 +9,10 @@ import {
 import { HuntingSheetPanel } from "../components/HuntingSheetPanel";
 import { Pagination } from "../components/Pagination";
 import { PeriodToolbar, toDateKey, type PeriodType } from "../components/PeriodToolbar";
+import { RowSelectCheckbox } from "../components/RowSelectCheckbox";
+import { SelectionBar } from "../components/SelectionBar";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
+import { useRowSelection } from "../hooks/useRowSelection";
 
 const BID_STATUSES = ["DRAFT", "SENT", "SHORTLISTED", "REJECTED", "WITHDRAWN", "WON"] as const;
 const PAGE_SIZE = 10;
@@ -53,7 +56,11 @@ export function HuntingBidsPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+
+  const pageIds = useMemo(() => items.map((b) => b.id), [items]);
+  const selection = useRowSelection(pageIds);
 
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -118,7 +125,24 @@ export function HuntingBidsPage() {
     try {
       await api(`/hunting/bids/${id}`, { method: "DELETE" });
       setDeleteId(null);
+      selection.clear();
       if (items.length === 1 && page > 1) setPage((p) => p - 1);
+      else setReloadToken((n) => n + 1);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeSelected() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    setSaving(true);
+    try {
+      await Promise.all(ids.map((id) => api(`/hunting/bids/${id}`, { method: "DELETE" })));
+      setConfirmBulkDelete(false);
+      selection.clear();
+      const remaining = items.length - ids.length;
+      if (remaining <= 0 && page > 1) setPage((p) => p - 1);
       else setReloadToken((n) => n + 1);
     } finally {
       setSaving(false);
@@ -215,10 +239,28 @@ export function HuntingBidsPage() {
                 <p>{t("hunting.bids.emptyPeriod")}</p>
               </div>
             )}
+            {!loading && items.length > 0 ? (
+              <SelectionBar
+                selection={selection}
+                pageIds={pageIds}
+                disabled={loading}
+                deleteBusy={saving}
+                onDeleteSelected={() => setConfirmBulkDelete(true)}
+              />
+            ) : null}
             {!loading &&
               items.map((b) => (
-                <article key={b.id} className="panel hunting-card">
+                <article
+                  key={b.id}
+                  className={`panel hunting-card${selection.isSelected(b.id) ? " is-selected" : ""}`}
+                >
                   <div className="hunting-card-main">
+                    <RowSelectCheckbox
+                      checked={selection.isSelected(b.id)}
+                      onChange={() => selection.toggle(b.id)}
+                      label={t("common.selectRow")}
+                      disabled={saving || loading}
+                    />
                     <div className="hunting-card-copy">
                       <div className="hunting-card-title-row">
                         <h3 translate="no">
@@ -299,6 +341,16 @@ export function HuntingBidsPage() {
           if (deleteId) void remove(deleteId);
         }}
         onCancel={() => setDeleteId(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("common.deleteSelectedTitle")}
+        body={t("common.confirmDeleteSelected", { count: selection.selectedCount })}
+        danger
+        busy={saving}
+        onConfirm={() => void removeSelected()}
+        onCancel={() => setConfirmBulkDelete(false)}
       />
     </section>
   );

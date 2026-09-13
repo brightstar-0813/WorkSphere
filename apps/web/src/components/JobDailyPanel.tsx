@@ -2,8 +2,12 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { RowSelectCheckbox } from "./RowSelectCheckbox";
+import { SelectionBar } from "./SelectionBar";
 import { SchedulePanel } from "./SchedulePanel";
 import { statusTone } from "./StatusBadge";
+import { useRowSelection } from "../hooks/useRowSelection";
 import { addDays, toLocalDateInput } from "../lib/datetime";
 import type { CalEvent } from "../types/calendar";
 
@@ -69,6 +73,7 @@ export function JobDailyPanel({ jobId, jobTitle }: Props) {
   const [busy, setBusy] = useState(false);
   const [titleDrafts, setTitleDrafts] = useState<Record<string, string>>({});
   const [descDrafts, setDescDrafts] = useState<Record<string, string>>({});
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
 
   const setDay = useCallback(
     (next: string) => {
@@ -159,21 +164,40 @@ export function JobDailyPanel({ jobId, jobTitle }: Props) {
     await load();
   }
 
+  const items = board?.items ?? [];
+  const visible = useMemo(
+    () => (filter === "ALL" ? items : items.filter((i) => i.status === filter)),
+    [items, filter],
+  );
+  const pageIds = useMemo(() => visible.map((i) => i.id), [visible]);
+  const selection = useRowSelection(pageIds);
+
   async function removeItem(itemId: string) {
     await api(`/jobs/${jobId}/daily/items/${itemId}`, { method: "DELETE" });
+    selection.clear();
     await load();
+  }
+
+  async function removeSelected() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        ids.map((id) => api(`/jobs/${jobId}/daily/items/${id}`, { method: "DELETE" })),
+      );
+      setConfirmBulkDelete(false);
+      selection.clear();
+      await load();
+    } finally {
+      setBusy(false);
+    }
   }
 
   function shiftDay(dir: -1 | 1) {
     const next = addDays(new Date(`${date}T12:00:00`), dir);
     setDay(toLocalDateInput(next.toISOString()));
   }
-
-  const items = board?.items ?? [];
-  const visible = useMemo(
-    () => (filter === "ALL" ? items : items.filter((i) => i.status === filter)),
-    [items, filter]
-  );
 
   const metrics = useMemo(() => {
     const todo = items.filter((i) => i.status === "TODO").length;
@@ -304,6 +328,16 @@ export function JobDailyPanel({ jobId, jobTitle }: Props) {
 
           {loading && <p className="muted small">{t("common.loading")}</p>}
 
+          {!loading && visible.length > 0 ? (
+            <SelectionBar
+              selection={selection}
+              pageIds={pageIds}
+              disabled={busy || loading}
+              deleteBusy={busy}
+              onDeleteSelected={() => setConfirmBulkDelete(true)}
+            />
+          ) : null}
+
           <ul className="daily-list unified itsm-queue-list">
             {!loading && visible.length === 0 && (
               <li className="itsm-queue-empty muted">{t("jobs.daily.empty")}</li>
@@ -311,8 +345,16 @@ export function JobDailyPanel({ jobId, jobTitle }: Props) {
             {visible.map((item) => (
               <li
                 key={item.id}
-                className={`daily-item itsm-queue-item status-${item.status.toLowerCase()}`}
+                className={`daily-item itsm-queue-item status-${item.status.toLowerCase()}${
+                  selection.isSelected(item.id) ? " is-selected" : ""
+                }`}
               >
+                <RowSelectCheckbox
+                  checked={selection.isSelected(item.id)}
+                  onChange={() => selection.toggle(item.id)}
+                  label={t("common.selectRow")}
+                  disabled={busy || loading}
+                />
                 <label className="field itsm-status-field">
                   <span className="sr-only">{t("common.status")}</span>
                   <select
@@ -398,6 +440,18 @@ export function JobDailyPanel({ jobId, jobTitle }: Props) {
           />
         </section>
       </div>
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("common.deleteSelectedTitle")}
+        body={t("common.confirmDeleteSelected", { count: selection.selectedCount })}
+        danger
+        busy={busy}
+        onConfirm={() => void removeSelected()}
+        onCancel={() => {
+          if (!busy) setConfirmBulkDelete(false);
+        }}
+      />
     </div>
   );
 }

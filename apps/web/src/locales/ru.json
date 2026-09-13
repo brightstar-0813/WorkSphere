@@ -102,7 +102,16 @@
     "next": "Вперёд",
     "pagination": "Пагинация",
     "pageOf": "Стр. {{page}} из {{totalPages}}",
-    "pageRange": "{{from}}–{{to}} из {{total}}"
+    "pageRange": "{{from}}–{{to}} из {{total}}",
+    "selection": "Выбор строк",
+    "selectAll": "Выбрать все",
+    "selectNone": "Снять выбор на странице",
+    "selectRow": "Выбрать строку",
+    "clearSelection": "Сбросить",
+    "selectedCount": "Выбрано: {{count}}",
+    "deleteSelected": "Удалить выбранные",
+    "confirmDeleteSelected": "Удалить {{count}} выбранных элементов? Это нельзя отменить.",
+    "deleteSelectedTitle": "Удалить выбранные?"
   },
   "jobs": {
     "heading": "Job handle",

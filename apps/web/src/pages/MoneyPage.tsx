@@ -7,8 +7,11 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageHeader } from "../components/PageHeader";
 import { PageState } from "../components/PageState";
 import { Pagination } from "../components/Pagination";
+import { RowSelectCheckbox } from "../components/RowSelectCheckbox";
+import { SelectionBar } from "../components/SelectionBar";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
 import { parseDateKey, toDateKey } from "../components/PeriodToolbar";
+import { useRowSelection } from "../hooks/useRowSelection";
 import { resolveAppTimeZone } from "../lib/timezone";
 
 type Tx = {
@@ -47,6 +50,7 @@ export function MoneyPage() {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditForm>({
     type: "EXPENSE",
@@ -95,6 +99,8 @@ export function MoneyPage() {
 
   const currency = items[0]?.currency ?? "USD";
   const pendingDelete = items.find((tx) => tx.id === deleteId) ?? null;
+  const pageIds = useMemo(() => items.map((tx) => tx.id), [items]);
+  const selection = useRowSelection(pageIds);
 
   function startEdit(tx: Tx) {
     setEditId(tx.id);
@@ -195,6 +201,7 @@ export function MoneyPage() {
       await api(`/transactions/${id}`, { method: "DELETE" });
       if (editId === id) setEditId(null);
       setDeleteId(null);
+      selection.clear();
       const nextPage = items.length <= 1 && page > 1 ? page - 1 : page;
       await load(nextPage);
       notify({
@@ -205,6 +212,35 @@ export function MoneyPage() {
               category: tx.category,
             })
           : undefined,
+        tone: "success",
+        sourceType: "TRANSACTION",
+      });
+    } catch (err) {
+      notify({
+        title: t("common.error"),
+        body: err instanceof Error ? err.message : undefined,
+        tone: "danger",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSelected() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(ids.map((id) => api(`/transactions/${id}`, { method: "DELETE" })));
+      if (editId && ids.includes(editId)) setEditId(null);
+      setConfirmBulkDelete(false);
+      selection.clear();
+      const remaining = items.length - ids.length;
+      const nextPage = remaining <= 0 && page > 1 ? page - 1 : page;
+      await load(nextPage);
+      notify({
+        title: t("money.toastDeletedTitle"),
+        body: t("common.selectedCount", { count: ids.length }),
         tone: "success",
         sourceType: "TRANSACTION",
       });
@@ -277,13 +313,30 @@ export function MoneyPage() {
 
       <div className="panel money-list-panel">
         <PageState loading={loading && items.length === 0} empty={!loading && items.length === 0} />
+        {items.length > 0 ? (
+          <SelectionBar
+            selection={selection}
+            pageIds={pageIds}
+            disabled={loading}
+            deleteBusy={busy}
+            onDeleteSelected={() => setConfirmBulkDelete(true)}
+          />
+        ) : null}
         <div className="list">
           {items.map((tx) => (
             <article
               key={tx.id}
-              className={`row money-tx-row${editId === tx.id ? " is-editing" : ""}`}
+              className={`row money-tx-row${editId === tx.id ? " is-editing" : ""}${
+                selection.isSelected(tx.id) ? " is-selected" : ""
+              }`}
             >
               <div className="money-tx-main">
+                <RowSelectCheckbox
+                  checked={selection.isSelected(tx.id)}
+                  onChange={() => selection.toggle(tx.id)}
+                  label={t("common.selectRow")}
+                  disabled={busy || loading}
+                />
                 <div>
                   <strong className={tx.type === "INCOME" ? "pos" : "neg"}>
                     {tx.type === "INCOME" ? "+" : "-"}
@@ -424,6 +477,18 @@ export function MoneyPage() {
         }}
         onCancel={() => {
           if (!busy) setDeleteId(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("common.deleteSelectedTitle")}
+        body={t("common.confirmDeleteSelected", { count: selection.selectedCount })}
+        danger
+        busy={busy}
+        onConfirm={() => void removeSelected()}
+        onCancel={() => {
+          if (!busy) setConfirmBulkDelete(false);
         }}
       />
     </section>

@@ -102,7 +102,16 @@
     "next": "Next",
     "pagination": "Pagination",
     "pageOf": "Page {{page}} of {{totalPages}}",
-    "pageRange": "{{from}}–{{to}} of {{total}}"
+    "pageRange": "{{from}}–{{to}} of {{total}}",
+    "selection": "Row selection",
+    "selectAll": "Select all",
+    "selectNone": "Clear page selection",
+    "selectRow": "Select row",
+    "clearSelection": "Clear",
+    "selectedCount": "{{count}} selected",
+    "deleteSelected": "Delete selected",
+    "confirmDeleteSelected": "Delete {{count}} selected items? You can’t undo this.",
+    "deleteSelectedTitle": "Delete selected?"
   },
   "jobs": {
     "heading": "Job handle",
