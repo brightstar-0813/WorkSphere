@@ -216,6 +216,10 @@ export async function sendChatMessage(roomId: string, body: string): Promise<Ack
     });
     return { ok: true, data };
   } catch (e) {
+    const err = e as Error & { code?: string; message?: string };
+    if (err?.code === "LOCKED" || err?.message === "Password required") {
+      return { ok: false, error: "LOCKED" };
+    }
     return { ok: false, error: e instanceof Error ? e.message : "FAILED" };
   }
 }

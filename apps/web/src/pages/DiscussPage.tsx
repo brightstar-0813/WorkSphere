@@ -86,12 +86,11 @@ function sameDay(a: string, b: string) {
 }
 
 function isLockedError(err: unknown) {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: string }).code === "LOCKED"
-  );
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: string; message?: string; status?: number };
+  if (e.code === "LOCKED") return true;
+  if (e.status === 403 && e.message === "Password required") return true;
+  return false;
 }
 
 export function DiscussPage() {
@@ -434,7 +433,17 @@ export function DiscussPage() {
         setHasMore(Boolean(meta.hasMore));
 
         const join = await joinChannel(roomId);
-        if (!cancelled && join.users) setPresence(join.users);
+        if (cancelled) return;
+        if (!join.ok && join.error === "LOCKED") {
+          setRooms((prev) =>
+            prev.map((r) => (r.id === roomId ? { ...r, unlocked: false, lastMessage: null } : r)),
+          );
+          setMessages([]);
+          setPresence([]);
+          setError(null);
+          return;
+        }
+        if (join.users) setPresence(join.users);
       } catch (e) {
         if (cancelled) return;
         if (isLockedError(e)) {
@@ -442,6 +451,8 @@ export function DiscussPage() {
             prev.map((r) => (r.id === roomId ? { ...r, unlocked: false, lastMessage: null } : r)),
           );
           setMessages([]);
+          setPresence([]);
+          setError(null);
           return;
         }
         setError(e instanceof Error ? e.message : t("discuss.error"));
@@ -614,10 +625,21 @@ export function DiscussPage() {
       );
       setUnlockPassword("");
     } catch (err) {
+      // Keep unlock UI visible; show wrong-password inline via banner.
       setError(err instanceof Error ? err.message : t("discuss.wrongPassword"));
     } finally {
       setUnlockBusy(false);
     }
+  }
+
+  function lockActiveRoom(roomId: string) {
+    setRooms((prev) =>
+      prev.map((r) => (r.id === roomId ? { ...r, unlocked: false, lastMessage: null } : r)),
+    );
+    setMessages([]);
+    setPresence([]);
+    setError(null);
+    leaveChannel(roomId);
   }
 
   function onDraftChange(value: string) {
@@ -700,9 +722,11 @@ export function DiscussPage() {
     const result = await sendChatMessage(activeId, body);
     if (!result.ok) {
       setDraft(body);
-      setError(
-        result.error === "LOCKED" ? t("discuss.lockedHint") : t("discuss.sendFailed"),
-      );
+      if (result.error === "LOCKED" || result.error === "Password required") {
+        lockActiveRoom(activeId);
+        return;
+      }
+      setError(t("discuss.sendFailed"));
       return;
     }
     stickBottomRef.current = true;
@@ -749,6 +773,10 @@ export function DiscussPage() {
       setEditingMessageId(null);
       setEditingBody("");
     } catch (err) {
+      if (isLockedError(err) && activeId) {
+        lockActiveRoom(activeId);
+        return;
+      }
       setError(err instanceof Error ? err.message : t("discuss.error"));
     } finally {
       setBusyAction(false);
@@ -983,18 +1011,24 @@ export function DiscussPage() {
               )}
 
               {needsUnlock ? (
-                <div className="discuss-locked">
+                <div className="discuss-locked" role="region" aria-label={t("discuss.protected")}>
+                  <span className="discuss-lock discuss-lock-lg" aria-hidden />
+                  <h3>{t("discuss.lockedPreview")}</h3>
                   <p>{t("discuss.lockedHint")}</p>
                   <form className="stack discuss-unlock" onSubmit={(e) => void onUnlock(e)}>
-                    <input
-                      type="password"
-                      value={unlockPassword}
-                      onChange={(e) => setUnlockPassword(e.target.value)}
-                      placeholder={t("discuss.unlockPassword")}
-                      autoComplete="current-password"
-                      required
-                      maxLength={72}
-                    />
+                    <label className="field">
+                      <span>{t("discuss.unlockPassword")}</span>
+                      <input
+                        type="password"
+                        value={unlockPassword}
+                        onChange={(e) => setUnlockPassword(e.target.value)}
+                        placeholder={t("discuss.unlockPassword")}
+                        autoComplete="current-password"
+                        autoFocus
+                        required
+                        maxLength={72}
+                      />
+                    </label>
                     <button type="submit" className="btn primary" disabled={unlockBusy || !unlockPassword.trim()}>
                       {unlockBusy ? t("common.loading") : t("discuss.unlock")}
                     </button>
