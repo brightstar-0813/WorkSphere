@@ -1035,7 +1035,7 @@ export function DiscussPage() {
                   </form>
                 </div>
               ) : (
-                <>
+                <div className="discuss-chat">
                   <div className="discuss-stream-wrap">
                     <div className="discuss-stream" ref={scrollerRef} onScroll={onScroll}>
                       {hasMore && (
@@ -1195,7 +1195,7 @@ export function DiscussPage() {
                       {t("discuss.send")}
                     </button>
                   </form>
-                </>
+                </div>
               )}
             </>
           )}

@@ -6250,12 +6250,17 @@ a.linkish:hover {
   max-width: 1280px;
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - var(--app-footer-height) - 5.5rem);
+  /* Stay within the viewport so the composer is never pushed off-screen */
+  height: calc(100dvh - var(--app-footer-height) - 3.85rem);
+  max-height: calc(100dvh - var(--app-footer-height) - 3.85rem);
+  min-height: 28rem;
+  overflow: hidden;
 }
 
 .discuss-header {
   align-items: flex-start;
   flex-shrink: 0;
+  margin-bottom: 0.85rem;
 }
 
 .discuss-status {
@@ -6291,10 +6296,8 @@ a.linkish:hover {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 0.85rem;
-  flex: 1;
-  min-height: min(70vh, 720px);
-  height: min(78vh, 820px);
-  max-height: calc(100vh - var(--app-footer-height) - 8.5rem);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .discuss-channels,
@@ -6303,7 +6306,15 @@ a.linkish:hover {
   flex-direction: column;
   min-height: 0;
   padding: 0;
+  margin-bottom: 0;
   overflow: hidden;
+}
+
+.discuss-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .discuss-channels-head {
@@ -6313,6 +6324,7 @@ a.linkish:hover {
   gap: 0.5rem;
   padding: 0.85rem 0.95rem;
   border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
 }
 
 .discuss-channels-head h2,
@@ -6328,6 +6340,7 @@ a.linkish:hover {
   padding: 0.75rem 0.95rem;
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
+  flex-shrink: 0;
 }
 
 .discuss-channel-list {
@@ -6398,6 +6411,7 @@ a.linkish:hover {
   padding: 0.85rem 1rem;
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
+  flex-shrink: 0;
 }
 
 .discuss-locked {
@@ -6515,6 +6529,7 @@ a.linkish:hover {
   gap: 1rem;
   padding: 0.9rem 1rem;
   border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
 }
 
 .discuss-stage-head p {
@@ -6736,6 +6751,7 @@ a.linkish:hover {
   font-size: 0.8rem;
   color: var(--muted);
   border-top: 1px solid transparent;
+  flex-shrink: 0;
 }
 
 .discuss-composer {
@@ -6744,6 +6760,7 @@ a.linkish:hover {
   padding: 0.75rem 1rem 0.95rem;
   border-top: 1px solid var(--line);
   background: var(--panel);
+  flex-shrink: 0;
 }
 
 .discuss-composer input {
@@ -6762,11 +6779,17 @@ a.linkish:hover {
 }
 
 @media (max-width: 860px) {
-  .discuss-layout {
-    grid-template-columns: 1fr;
+  .discuss-page {
     height: auto;
     max-height: none;
-    min-height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .discuss-layout {
+    grid-template-columns: 1fr;
+    flex: none;
+    min-height: 0;
   }
 
   .discuss-channels {
