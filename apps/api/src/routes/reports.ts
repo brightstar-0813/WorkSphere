@@ -1,50 +1,24 @@
 import { Router } from "express";
 import { prisma } from "../prisma.js";
 import { ownerFilter, requireAuth } from "../auth.js";
+import { countIcsScheduleEvents } from "../integrations/icsSync.js";
+import {
+  bidDateFilter,
+  formatAnchorKey,
+  interviewDateFilter,
+  parseAnchorDate,
+  parsePeriod,
+  resolvePeriod,
+} from "../period.js";
+import { resolveActorTimeZone } from "../requestTimeZone.js";
 
 export const reportsRouter = Router();
 reportsRouter.use(requireAuth);
-
-type PeriodType = "daily" | "weekly" | "monthly" | "all";
 
 type AmountBucket = {
   count: number;
   amountsByCurrency: Record<string, number>;
 };
-
-function startOfLocalDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-}
-
-function addDays(d: Date, n: number) {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-
-function parseAnchorDate(raw: unknown): Date {
-  if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const [y, m, day] = raw.split("-").map(Number);
-    return new Date(y, m - 1, day, 0, 0, 0, 0);
-  }
-  return startOfLocalDay(new Date());
-}
-
-function resolvePeriod(period: PeriodType, anchor: Date): { from: Date | null; to: Date | null } {
-  if (period === "all") return { from: null, to: null };
-
-  const dayStart = startOfLocalDay(anchor);
-  if (period === "daily") {
-    return { from: dayStart, to: addDays(dayStart, 1) };
-  }
-  if (period === "weekly") {
-    const weekStart = addDays(dayStart, -dayStart.getDay());
-    return { from: weekStart, to: addDays(weekStart, 7) };
-  }
-  const monthStart = new Date(dayStart.getFullYear(), dayStart.getMonth(), 1);
-  const monthEnd = new Date(dayStart.getFullYear(), dayStart.getMonth() + 1, 1);
-  return { from: monthStart, to: monthEnd };
-}
 
 function emptyBucket(): AmountBucket {
   return { count: 0, amountsByCurrency: {} };
@@ -57,64 +31,45 @@ function addAmount(bucket: AmountBucket, amountMinor: number | null, currency: s
   }
 }
 
-function parsePeriod(raw: unknown): PeriodType {
-  if (raw === "daily" || raw === "day") return "daily";
-  if (raw === "weekly" || raw === "week") return "weekly";
-  if (raw === "monthly" || raw === "month") return "monthly";
-  return "all";
-}
-
 reportsRouter.get("/summary", async (req, res) => {
   const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
+  const scopeUserId = typeof where.userId === "string" ? where.userId : req.user!.id;
+  const timeZone = await resolveActorTimeZone(req, scopeUserId);
   const period = parsePeriod(req.query.period);
-  const anchor = parseAnchorDate(req.query.date);
-  const { from, to } = resolvePeriod(period, anchor);
-  const range = from && to ? { gte: from, lt: to } : null;
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
 
-  const bidDateFilter = range
-    ? {
-        OR: [
-          { appliedAt: range },
-          { AND: [{ appliedAt: null }, { createdAt: range }] },
-        ],
-      }
-    : {};
+  const jobDateFilter = { createdAt: range };
+  const txDateFilter = { occurredAt: range };
+  const discussionDateFilter = { createdAt: range };
+  const eventDateFilter = { startsAt: range };
 
-  const interviewDateFilter = range
-    ? {
-        OR: [
-          { scheduledAt: range },
-          { AND: [{ scheduledAt: null }, { createdAt: range }] },
-        ],
-      }
-    : {};
+  const chatWhere =
+    typeof where.userId === "string"
+      ? { authorId: where.userId, createdAt: range }
+      : { createdAt: range };
 
-  const jobDateFilter = range ? { createdAt: range } : {};
-  const txDateFilter = range ? { occurredAt: range } : {};
-  const discussionDateFilter = range ? { createdAt: range } : {};
-  const eventDateFilter = range
-    ? { startsAt: range }
-    : { startsAt: { gte: new Date() } };
-
-  const [jobs, bids, interviews, transactions, discussions, events] = await Promise.all([
+  const [jobs, bids, interviews, transactions, discussions, chatMessages, events, icsSchedules] =
+    await Promise.all([
     prisma.job.groupBy({
       by: ["status"],
       where: { ...where, ...jobDateFilter },
       _count: true,
     }),
     prisma.huntingBid.findMany({
-      where: { ...where, ...bidDateFilter },
+      where: { ...where, ...bidDateFilter(range) },
       select: {
         status: true,
         amountMinor: true,
         currency: true,
         profileId: true,
-        profile: { select: { id: true, name: true } },
+        profile: { select: { id: true, name: true, country: true } },
       },
     }),
     prisma.huntingInterview.groupBy({
       by: ["status"],
-      where: { ...where, ...interviewDateFilter },
+      where: { ...where, ...interviewDateFilter(range) },
       _count: true,
     }),
     prisma.transaction.findMany({
@@ -122,11 +77,16 @@ reportsRouter.get("/summary", async (req, res) => {
       select: { type: true, amountMinor: true },
     }),
     prisma.discussion.count({ where: { ...where, ...discussionDateFilter } }),
+    prisma.chatMessage.count({ where: chatWhere }),
     prisma.calendarEvent.count({
       where: {
         ...where,
         ...eventDateFilter,
       },
+    }),
+    countIcsScheduleEvents({
+      userId: typeof where.userId === "string" ? where.userId : undefined,
+      startsAt: range,
     }),
   ]);
 
@@ -145,6 +105,16 @@ reportsRouter.get("/summary", async (req, res) => {
     {
       profileId: string;
       profileName: string;
+      country: string;
+      totalCount: number;
+      amountsByCurrency: Record<string, number>;
+      byStatus: Record<string, AmountBucket>;
+    }
+  >();
+  const countryMap = new Map<
+    string,
+    {
+      country: string;
       totalCount: number;
       amountsByCurrency: Record<string, number>;
       byStatus: Record<string, AmountBucket>;
@@ -166,6 +136,7 @@ reportsRouter.get("/summary", async (req, res) => {
       profile = {
         profileId: bid.profile.id,
         profileName: bid.profile.name,
+        country: bid.profile.country ?? "",
         totalCount: 0,
         amountsByCurrency: {},
         byStatus: {},
@@ -179,19 +150,48 @@ reportsRouter.get("/summary", async (req, res) => {
       profile.amountsByCurrency[bid.currency] =
         (profile.amountsByCurrency[bid.currency] ?? 0) + bid.amountMinor;
     }
+
+    const countryKey = (bid.profile.country ?? "").trim() || "";
+    let countryBucket = countryMap.get(countryKey);
+    if (!countryBucket) {
+      countryBucket = {
+        country: countryKey,
+        totalCount: 0,
+        amountsByCurrency: {},
+        byStatus: {},
+      };
+      countryMap.set(countryKey, countryBucket);
+    }
+    if (!countryBucket.byStatus[bid.status]) countryBucket.byStatus[bid.status] = emptyBucket();
+    addAmount(countryBucket.byStatus[bid.status], bid.amountMinor, bid.currency);
+    countryBucket.totalCount += 1;
+    if (bid.amountMinor != null) {
+      countryBucket.amountsByCurrency[bid.currency] =
+        (countryBucket.amountsByCurrency[bid.currency] ?? 0) + bid.amountMinor;
+    }
   }
 
   const byProfile = [...profileMap.values()].sort((a, b) =>
     a.profileName.localeCompare(b.profileName)
   );
+  const byCountry = [...countryMap.values()].sort((a, b) => {
+    if (!a.country && b.country) return 1;
+    if (a.country && !b.country) return -1;
+    return a.country.localeCompare(b.country);
+  });
+
+  const interviewsByStatus = Object.fromEntries(interviews.map((i) => [i.status, i._count]));
+  if (icsSchedules > 0) {
+    interviewsByStatus.SCHEDULED = (interviewsByStatus.SCHEDULED ?? 0) + icsSchedules;
+  }
 
   return res.json({
     data: {
       period: {
         type: period,
-        from: from?.toISOString() ?? null,
-        to: to?.toISOString() ?? null,
-        date: `${anchor.getFullYear()}-${String(anchor.getMonth() + 1).padStart(2, "0")}-${String(anchor.getDate()).padStart(2, "0")}`,
+        from: from.toISOString(),
+        to: to.toISOString(),
+        date: formatAnchorKey(anchor, timeZone),
       },
       jobsByStatus: Object.fromEntries(jobs.map((j) => [j.status, j._count])),
       bidsByStatus,
@@ -200,12 +200,14 @@ reportsRouter.get("/summary", async (req, res) => {
         totalsByCurrency,
         byStatus,
         byProfile,
+        byCountry,
       },
-      interviewsByStatus: Object.fromEntries(interviews.map((i) => [i.status, i._count])),
+      interviewsByStatus,
       /** @deprecated use bidsByStatus */
       huntingByStage: bidsByStatus,
       money: { incomeMinor: income, expenseMinor: expense, netMinor: income - expense },
-      discussionCount: discussions,
+      discussionCount: discussions + chatMessages,
+      chatMessageCount: chatMessages,
       upcomingEvents: events,
       eventsInPeriod: events,
     },
