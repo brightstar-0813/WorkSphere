@@ -16,6 +16,10 @@ export type ChatMessage = {
   author: ChatAuthor;
 };
 
+export type ChatNotifyPayload = ChatMessage & {
+  roomName: string;
+};
+
 export type ChatPresenceUser = {
   id: string;
   name: string;
@@ -26,6 +30,9 @@ type AckResult<T> = { ok: true; data: T } | { ok: false; error?: string };
 
 let socket: Socket | null = null;
 const joinedRooms = new Set<string>();
+let activeDiscussRoomId: string | null = null;
+let chatNotifyHandler: ((payload: ChatNotifyPayload) => void) | null = null;
+let chatNotifyBound = false;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, error = "TIMEOUT"): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -45,6 +52,40 @@ function withTimeout<T>(promise: Promise<T>, ms: number, error = "TIMEOUT"): Pro
 
 export function getChatSocket() {
   return socket;
+}
+
+/** Track which Discuss channel is open so we can suppress redundant toasts. */
+export function setActiveDiscussRoom(roomId: string | null) {
+  activeDiscussRoomId = roomId;
+}
+
+export function getActiveDiscussRoom() {
+  return activeDiscussRoomId;
+}
+
+export function shouldSuppressChatToast(roomId: string) {
+  if (typeof document === "undefined") return false;
+  if (document.visibilityState !== "visible") return false;
+  if (!window.location.pathname.startsWith("/discuss")) return false;
+  return activeDiscussRoomId === roomId;
+}
+
+function onChatNotify(payload: ChatNotifyPayload) {
+  chatNotifyHandler?.(payload);
+}
+
+function bindChatNotifyListener(s: Socket) {
+  if (chatNotifyBound) return;
+  s.on("chat:notify", onChatNotify);
+  chatNotifyBound = true;
+}
+
+export function setChatNotifyHandler(handler: ((payload: ChatNotifyPayload) => void) | null) {
+  chatNotifyHandler = handler;
+  if (handler) {
+    const s = connectChatSocket();
+    if (s) bindChatNotifyListener(s);
+  }
 }
 
 async function waitUntilConnected(s: Socket, ms = 8000): Promise<boolean> {
@@ -70,6 +111,7 @@ export function connectChatSocket() {
   if (socket) {
     socket.auth = { token };
     if (!socket.connected) socket.connect();
+    bindChatNotifyListener(socket);
     return socket;
   }
 
@@ -92,15 +134,19 @@ export function connectChatSocket() {
     joinedRooms.clear();
   });
 
+  bindChatNotifyListener(socket);
   return socket;
 }
 
 export function disconnectChatSocket() {
   if (!socket) return;
+  socket.off("chat:notify", onChatNotify);
+  chatNotifyBound = false;
   socket.removeAllListeners();
   socket.disconnect();
   socket = null;
   joinedRooms.clear();
+  activeDiscussRoomId = null;
 }
 
 export async function joinChannel(

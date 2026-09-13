@@ -2,18 +2,30 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { ownerFilter, requireAuth } from "../auth.js";
+import { listMeta, parsePagination } from "../pagination.js";
 
 export const discussionsRouter = Router();
 discussionsRouter.use(requireAuth);
 
 discussionsRouter.get("/", async (req, res) => {
   const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
-  const data = await prisma.discussion.findMany({
-    where,
-    include: { replies: { orderBy: { createdAt: "asc" }, include: { author: { select: { id: true, name: true } } } } },
-    orderBy: { updatedAt: "desc" },
-  });
-  return res.json({ data });
+  const { page, pageSize, skip, take } = parsePagination(req.query as Record<string, unknown>);
+  const [total, data] = await Promise.all([
+    prisma.discussion.count({ where }),
+    prisma.discussion.findMany({
+      where,
+      include: {
+        replies: {
+          orderBy: { createdAt: "asc" },
+          include: { author: { select: { id: true, name: true } } },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      skip,
+      take,
+    }),
+  ]);
+  return res.json({ data, meta: listMeta(total, page, pageSize) });
 });
 
 discussionsRouter.post("/", async (req, res) => {
