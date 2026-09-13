@@ -26,6 +26,58 @@ export function shareInviteUrl(token: string) {
   return `${webOrigin()}/share/${token}`;
 }
 
+export function passwordResetUrl(token: string) {
+  return `${webOrigin()}/reset-password?token=${encodeURIComponent(token)}`;
+}
+
+export type AuthEmailResult = {
+  sent: boolean;
+  method: "smtp" | "adc" | "none";
+  resetUrl: string;
+};
+
+/** System mail for password reset (SMTP → ADC Gmail). Never uses end-user OAuth mailboxes. */
+export async function sendPasswordResetEmail(input: {
+  to: string;
+  name: string;
+  token: string;
+}): Promise<AuthEmailResult> {
+  const resetUrl = passwordResetUrl(input.token);
+  const subject = "Reset your WorkSphere password";
+  const text = [
+    `Hi ${input.name},`,
+    ``,
+    `We received a request to reset your WorkSphere password.`,
+    `Open this link within 1 hour to choose a new password:`,
+    resetUrl,
+    ``,
+    `If you did not request this, you can ignore this email.`,
+  ].join("\n");
+  const html = `
+    <p>Hi <strong>${escapeHtml(input.name)}</strong>,</p>
+    <p>We received a request to reset your WorkSphere password.</p>
+    <p><a href="${escapeHtml(resetUrl)}">Reset your password</a></p>
+    <p style="color:#666;font-size:12px">This link expires in 1 hour. If you did not request this, ignore this email.</p>
+  `;
+
+  const payload = { to: input.to, subject, text, html };
+
+  if (smtpConfigured()) {
+    const smtp = await trySmtp(payload);
+    if (smtp) return { sent: true, method: "smtp", resetUrl };
+  }
+
+  try {
+    const adc = await tryAdcGmail(payload);
+    if (adc) return { sent: true, method: "adc", resetUrl };
+  } catch (err) {
+    console.error("[password-reset] ADC Gmail path failed", err);
+  }
+
+  console.info(`[password-reset] No mail transport. Reset for ${input.to}: ${resetUrl}`);
+  return { sent: false, method: "none", resetUrl };
+}
+
 export async function sendCalendarShareInvite(input: {
   to: string;
   requesterName: string;

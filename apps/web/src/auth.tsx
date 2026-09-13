@@ -9,7 +9,8 @@ import {
 } from "react";
 import { api, setToken, getToken, type AuthUser } from "./api";
 import i18n from "./i18n";
-import { detectTimeZone } from "./lib/timezone";
+import { DEFAULT_TIME_ZONE, resolveAppTimeZone } from "./lib/timezone";
+import { disconnectChatSocket } from "./chat";
 
 const TZ_KEY = "worksphere_timezone";
 
@@ -18,12 +19,11 @@ function cacheTimeZone(tz: string) {
 }
 
 function readCachedTimeZone() {
-  return localStorage.getItem(TZ_KEY) || detectTimeZone();
+  return localStorage.getItem(TZ_KEY) || DEFAULT_TIME_ZONE;
 }
 
 async function ensureUserTimeZone(user: AuthUser, setUser: (u: AuthUser) => void) {
-  const browserTz = detectTimeZone();
-  const tz = user.timeZone?.trim() || readCachedTimeZone() || browserTz;
+  const tz = resolveAppTimeZone(user.timeZone?.trim() || readCachedTimeZone());
   cacheTimeZone(tz);
   if (!user.timeZone?.trim() && getToken()) {
     try {
@@ -37,7 +37,7 @@ async function ensureUserTimeZone(user: AuthUser, setUser: (u: AuthUser) => void
       /* keep local */
     }
   }
-  if (user.timeZone?.trim()) cacheTimeZone(user.timeZone);
+  if (user.timeZone?.trim()) cacheTimeZone(resolveAppTimeZone(user.timeZone));
 }
 
 type AuthState = {
@@ -46,6 +46,8 @@ type AuthState = {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
+  applySession: (token: string, user: AuthUser) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   setLocale: (locale: string) => Promise<void>;
   setTimeZone: (timeZone: string) => Promise<void>;
   updateProfile: (patch: { name?: string }) => Promise<void>;
@@ -90,19 +92,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const register = useCallback(async (name: string, email: string, password: string) => {
     const locale = localStorage.getItem("worksphere_locale") ?? "en";
-    const timeZone = readCachedTimeZone();
+    const timeZone = resolveAppTimeZone(readCachedTimeZone());
     const data = await api<{ token: string; user: AuthUser }>("/auth/register", {
       method: "POST",
       body: JSON.stringify({ name, email, password, locale, timeZone }),
     });
     setToken(data.token);
     setUser(data.user);
-    cacheTimeZone(data.user.timeZone || timeZone);
+    cacheTimeZone(resolveAppTimeZone(data.user.timeZone || timeZone));
   }, []);
 
   const logout = useCallback(() => {
+    disconnectChatSocket();
     setToken(null);
     setUser(null);
+  }, []);
+
+  const applySession = useCallback(async (token: string, nextUser: AuthUser) => {
+    setToken(token);
+    setUser(nextUser);
+    void i18n.changeLanguage(nextUser.locale);
+    localStorage.setItem("worksphere_locale", nextUser.locale);
+    await ensureUserTimeZone(nextUser, setUser);
+  }, []);
+
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    await api<{ ok: boolean }>("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
   }, []);
 
   const setLocale = useCallback(async (locale: string) => {
@@ -158,6 +176,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       register,
       logout,
+      applySession,
+      changePassword,
       setLocale,
       setTimeZone,
       updateProfile,
@@ -170,6 +190,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       register,
       logout,
+      applySession,
+      changePassword,
       setLocale,
       setTimeZone,
       updateProfile,

@@ -1,9 +1,9 @@
 import { FormEvent, useState } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ThemePicker } from "../ThemePicker";
-import { AppFooter } from "../components/AppFooter";
-import { LanguagePicker } from "../components/LanguagePicker";
-import { Logo } from "../components/Logo";
+import { AlertBanner } from "../components/AlertBanner";
+import { AuthLayout } from "../components/AuthLayout";
+import { PasswordField } from "../components/PasswordField";
 import { useAuth } from "../auth";
 
 export function LoginPage() {
@@ -13,11 +13,22 @@ export function LoginPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (mode === "register") {
+      if (password !== confirm) {
+        setError(t("auth.passwordMismatch"));
+        return;
+      }
+      if (password.length < 6) {
+        setError(t("auth.passwordTooShort"));
+        return;
+      }
+    }
     setBusy(true);
     setError("");
     try {
@@ -30,67 +41,73 @@ export function LoginPage() {
     }
   }
 
+  function switchMode() {
+    setMode(mode === "login" ? "register" : "login");
+    setError("");
+    setConfirm("");
+  }
+
   return (
-    <div className="auth-shell">
-      <header className="auth-topbar">
-        <div className="topbar-title">
-          <span className="topbar-kicker">{t("appName")}</span>
-          <strong>{mode === "login" ? t("auth.login") : t("auth.register")}</strong>
-        </div>
-        <div className="topbar-actions">
-          <LanguagePicker />
-          <ThemePicker compact />
-        </div>
-      </header>
+    <AuthLayout>
+      <form onSubmit={(e) => void onSubmit(e)} className="stack" style={{ marginTop: "1rem" }}>
+        {mode === "register" && (
+          <label className="field">
+            <span>{t("auth.name")}</span>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="name"
+              required
+            />
+          </label>
+        )}
+        <label className="field">
+          <span>{t("auth.email")}</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            required
+          />
+        </label>
+        <PasswordField
+          label={t("auth.password")}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete={mode === "login" ? "current-password" : "new-password"}
+          minLength={mode === "register" ? 6 : undefined}
+          required
+        />
+        {mode === "register" && (
+          <PasswordField
+            label={t("auth.confirmPassword")}
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            autoComplete="new-password"
+            minLength={6}
+            required
+          />
+        )}
+        {error && (
+          <AlertBanner tone="danger" onDismiss={() => setError("")}>
+            {error}
+          </AlertBanner>
+        )}
+        <button className="btn primary" disabled={busy}>
+          {mode === "login" ? t("auth.login") : t("auth.register")}
+        </button>
+      </form>
 
-      <section className="auth-hero">
-        <div>
-          <div className="brand-mark">
-            <Logo withWordmark wordmark={t("appName")} size={40} light />
-          </div>
-        </div>
-      </section>
+      {mode === "login" && (
+        <Link className="linkish" to="/forgot-password">
+          {t("auth.forgotPassword")}
+        </Link>
+      )}
 
-      <section className="auth-side">
-        <div className="auth-panel">
-          <Logo withWordmark wordmark={t("appName")} size={36} />
-
-          <form onSubmit={onSubmit} className="stack" style={{ marginTop: "1rem" }}>
-            {mode === "register" && (
-              <label className="field">
-                <span>{t("auth.name")}</span>
-                <input value={name} onChange={(e) => setName(e.target.value)} required />
-              </label>
-            )}
-            <label className="field">
-              <span>{t("auth.email")}</span>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            </label>
-            <label className="field">
-              <span>{t("auth.password")}</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </label>
-            {error && <p className="error">{error}</p>}
-            <button className="btn primary" disabled={busy}>
-              {mode === "login" ? t("auth.login") : t("auth.register")}
-            </button>
-          </form>
-          <button
-            type="button"
-            className="linkish"
-            onClick={() => setMode(mode === "login" ? "register" : "login")}
-          >
-            {mode === "login" ? t("auth.noAccount") : t("auth.hasAccount")}
-          </button>
-        </div>
-      </section>
-
-      <AppFooter />
-    </div>
+      <button type="button" className="linkish" onClick={switchMode}>
+        {mode === "login" ? t("auth.noAccount") : t("auth.hasAccount")}
+      </button>
+    </AuthLayout>
   );
 }
