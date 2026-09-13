@@ -3,56 +3,197 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { requireAdmin, requireAuth } from "../auth.js";
+import {
+  countIcsScheduleEvents,
+  countIcsScheduleEventsByUser,
+  listIcsScheduleEvents,
+} from "../integrations/icsSync.js";
+import {
+  bidDateFilter,
+  formatAnchorKey,
+  interviewDateFilter,
+  parseAnchorDate,
+  parsePeriod,
+  resolvePeriod,
+} from "../period.js";
+import { resolveActorTimeZone } from "../requestTimeZone.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireAdmin);
 
-adminRouter.get("/overview", async (_req, res) => {
-  const [users, events, jobs, huntings, interviews, transactions, jobsByStatus, bidsByStatus, interviewsByStatus] =
-    await Promise.all([
-      prisma.user.count(),
-      prisma.calendarEvent.count(),
-      prisma.job.count(),
-      prisma.huntingBid.count(),
-      prisma.huntingInterview.count(),
-      prisma.transaction.count(),
-      prisma.job.groupBy({ by: ["status"], _count: { _all: true } }),
-      prisma.huntingBid.groupBy({ by: ["status"], _count: { _all: true } }),
-      prisma.huntingInterview.groupBy({ by: ["status"], _count: { _all: true } }),
-    ]);
+adminRouter.get("/overview", async (req, res) => {
+  const userId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
+  const timeZone = await resolveActorTimeZone(req, userId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
+  const owner = userId ? { userId } : {};
+  const icsStartsAt = range;
+
+  const interviewScheduleWhere = {
+    ...owner,
+    ...interviewDateFilter(range),
+  };
+
+  const [
+    users,
+    events,
+    jobs,
+    huntings,
+    interviews,
+    transactions,
+    jobsByStatus,
+    bidsByStatus,
+    interviewsByStatus,
+    icsSchedules,
+    huntingSchedule,
+    icsSchedule,
+    userRows,
+  ] = await Promise.all([
+    prisma.user.count({ where: userId ? { id: userId } : undefined }),
+    prisma.calendarEvent.count({ where: { ...owner, startsAt: range } }),
+    prisma.job.count({ where: { ...owner, createdAt: range } }),
+    prisma.huntingBid.count({ where: { ...owner, ...bidDateFilter(range) } }),
+    prisma.huntingInterview.count({ where: { ...owner, ...interviewDateFilter(range) } }),
+    prisma.transaction.count({ where: { ...owner, occurredAt: range } }),
+    prisma.job.groupBy({
+      by: ["status"],
+      where: { ...owner, createdAt: range },
+      _count: { _all: true },
+    }),
+    prisma.huntingBid.groupBy({
+      by: ["status"],
+      where: { ...owner, ...bidDateFilter(range) },
+      _count: { _all: true },
+    }),
+    prisma.huntingInterview.groupBy({
+      by: ["status"],
+      where: { ...owner, ...interviewDateFilter(range) },
+      _count: { _all: true },
+    }),
+    countIcsScheduleEvents({ userId, startsAt: icsStartsAt }),
+    prisma.huntingInterview.findMany({
+      where: interviewScheduleWhere,
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        profile: { select: { id: true, name: true } },
+      },
+      orderBy: { scheduledAt: "asc" },
+      take: 100,
+    }),
+    listIcsScheduleEvents({ userId, startsAt: icsStartsAt, take: 100 }),
+    prisma.user.findMany({
+      where: userId ? { id: userId } : undefined,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        disabled: true,
+      },
+      orderBy: { name: "asc" },
+    }),
+  ]);
+
+  const userIds = userRows.map((u) => u.id);
+  const [bidsPerUser, interviewsPerUser, jobsPerUser, icsPerUser] = await Promise.all([
+    prisma.huntingBid.groupBy({
+      by: ["userId"],
+      where: { userId: { in: userIds }, ...bidDateFilter(range) },
+      _count: { _all: true },
+    }),
+    prisma.huntingInterview.groupBy({
+      by: ["userId"],
+      where: { userId: { in: userIds }, ...interviewDateFilter(range) },
+      _count: { _all: true },
+    }),
+    prisma.job.groupBy({
+      by: ["userId"],
+      where: { userId: { in: userIds }, ...(range ? { createdAt: range } : {}) },
+      _count: { _all: true },
+    }),
+    countIcsScheduleEventsByUser({ userIds, startsAt: icsStartsAt }),
+  ]);
+
+  const bidMap = Object.fromEntries(bidsPerUser.map((r) => [r.userId, r._count._all]));
+  const interviewMap = Object.fromEntries(interviewsPerUser.map((r) => [r.userId, r._count._all]));
+  const icsMap = Object.fromEntries(icsPerUser.map((r) => [r.userId, r.count]));
+  const jobMap = Object.fromEntries(jobsPerUser.map((r) => [r.userId, r._count._all]));
+
+  const byUser = userRows
+    .map((u) => ({
+      user: u,
+      bids: bidMap[u.id] ?? 0,
+      interviews: (interviewMap[u.id] ?? 0) + (icsMap[u.id] ?? 0),
+      jobs: jobMap[u.id] ?? 0,
+    }))
+    .filter((row) => row.bids + row.interviews + row.jobs > 0 || Boolean(userId))
+    .sort((a, b) => b.bids + b.interviews - (a.bids + a.interviews));
+
+  const byStatus = Object.fromEntries(interviewsByStatus.map((r) => [r.status, r._count._all]));
+  if (icsSchedules > 0) {
+    byStatus.SCHEDULED = (byStatus.SCHEDULED ?? 0) + icsSchedules;
+  }
+
+  const interviewSchedule = [
+    ...huntingSchedule.map((iv) => ({ ...iv, source: "HUNTING" as const })),
+    ...icsSchedule,
+  ]
+    .sort((a, b) => {
+      const aAt = a.scheduledAt ? new Date(a.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+      const bAt = b.scheduledAt ? new Date(b.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+      return aAt - bAt;
+    })
+    .slice(0, 100);
+
   return res.json({
     data: {
+      period: {
+        type: period,
+        from: from.toISOString(),
+        to: to.toISOString(),
+        date: formatAnchorKey(anchor, timeZone),
+      },
       users,
       events,
       jobs,
       huntings,
-      interviews,
+      interviews: interviews + icsSchedules,
       transactions,
       jobsByStatus: Object.fromEntries(jobsByStatus.map((r) => [r.status, r._count._all])),
       bidsByStatus: Object.fromEntries(bidsByStatus.map((r) => [r.status, r._count._all])),
-      interviewsByStatus: Object.fromEntries(interviewsByStatus.map((r) => [r.status, r._count._all])),
+      interviewsByStatus: byStatus,
       /** @deprecated use bidsByStatus */
       huntingsByStage: Object.fromEntries(bidsByStatus.map((r) => [r.status, r._count._all])),
+      interviewSchedule,
+      byUser,
     },
   });
 });
 
 adminRouter.get("/events", async (req, res) => {
   const userId = typeof req.query.userId === "string" ? req.query.userId : undefined;
-  const from = typeof req.query.from === "string" ? new Date(req.query.from) : undefined;
-  const to = typeof req.query.to === "string" ? new Date(req.query.to) : undefined;
+  const fromQ = typeof req.query.from === "string" ? new Date(req.query.from) : undefined;
+  const toQ = typeof req.query.to === "string" ? new Date(req.query.to) : undefined;
+  const hasExplicitRange =
+    (fromQ && !Number.isNaN(fromQ.getTime())) || (toQ && !Number.isNaN(toQ.getTime()));
+  const timeZone = await resolveActorTimeZone(req, userId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const resolved = resolvePeriod(period, anchor, timeZone);
+
+  const startsAt = hasExplicitRange
+    ? {
+        ...(fromQ && !Number.isNaN(fromQ.getTime()) ? { gte: fromQ } : {}),
+        ...(toQ && !Number.isNaN(toQ.getTime()) ? { lte: toQ } : {}),
+      }
+    : { gte: resolved.from, lt: resolved.to };
 
   const data = await prisma.calendarEvent.findMany({
     where: {
       ...(userId ? { userId } : {}),
-      ...(from || to
-        ? {
-            startsAt: {
-              ...(from ? { gte: from } : {}),
-              ...(to ? { lte: to } : {}),
-            },
-          }
-        : {}),
+      startsAt,
     },
     include: {
       user: { select: { id: true, name: true, email: true } },
@@ -68,10 +209,16 @@ adminRouter.get("/jobs", async (req, res) => {
   const statusParsed = z
     .enum(["TODO", "IN_PROGRESS", "BLOCKED", "DONE"])
     .safeParse(req.query.status);
+  const timeZone = await resolveActorTimeZone(req, userId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
   const data = await prisma.job.findMany({
     where: {
       ...(userId ? { userId } : {}),
       ...(statusParsed.success ? { status: statusParsed.data } : {}),
+      createdAt: range,
     },
     include: {
       user: { select: { id: true, name: true, email: true } },
@@ -108,10 +255,16 @@ adminRouter.get("/huntings", async (req, res) => {
   const statusParsed = z
     .enum(["DRAFT", "SENT", "SHORTLISTED", "REJECTED", "WITHDRAWN", "WON"])
     .safeParse(req.query.status ?? req.query.stage);
+  const timeZone = await resolveActorTimeZone(req, userId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
   const data = await prisma.huntingBid.findMany({
     where: {
       ...(userId ? { userId } : {}),
       ...(statusParsed.success ? { status: statusParsed.data } : {}),
+      ...bidDateFilter(range),
     },
     include: {
       user: { select: { id: true, name: true, email: true } },
@@ -128,28 +281,77 @@ adminRouter.get("/interviews", async (req, res) => {
   const statusParsed = z
     .enum(["SCHEDULED", "COMPLETED", "CANCELLED", "NO_SHOW"])
     .safeParse(req.query.status);
-  const data = await prisma.huntingInterview.findMany({
-    where: {
-      ...(userId ? { userId } : {}),
-      ...(statusParsed.success ? { status: statusParsed.data } : {}),
-    },
-    include: {
-      user: { select: { id: true, name: true, email: true } },
-      profile: { select: { id: true, name: true } },
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 500,
-  });
+  const timeZone = await resolveActorTimeZone(req, userId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
+  const fromQ = typeof req.query.from === "string" ? new Date(req.query.from) : undefined;
+  const toQ = typeof req.query.to === "string" ? new Date(req.query.to) : undefined;
+
+  const scheduleRange =
+    fromQ || toQ
+      ? {
+          scheduledAt: {
+            ...(fromQ && !Number.isNaN(fromQ.getTime()) ? { gte: fromQ } : {}),
+            ...(toQ && !Number.isNaN(toQ.getTime()) ? { lte: toQ } : {}),
+          },
+        }
+      : interviewDateFilter(range);
+
+  const icsStartsAt =
+    fromQ && toQ && !Number.isNaN(fromQ.getTime()) && !Number.isNaN(toQ.getTime())
+      ? { gte: fromQ, lt: toQ }
+      : range;
+
+  const includeIcs = !statusParsed.success || statusParsed.data === "SCHEDULED";
+
+  const [huntingRows, icsRows] = await Promise.all([
+    prisma.huntingInterview.findMany({
+      where: {
+        ...(userId ? { userId } : {}),
+        ...(statusParsed.success ? { status: statusParsed.data } : {}),
+        ...scheduleRange,
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        profile: { select: { id: true, name: true } },
+      },
+      orderBy: [{ scheduledAt: "asc" }, { updatedAt: "desc" }],
+      take: 500,
+    }),
+    includeIcs
+      ? listIcsScheduleEvents({ userId, startsAt: icsStartsAt, take: 500 })
+      : Promise.resolve([]),
+  ]);
+
+  const data = [
+    ...huntingRows.map((iv) => ({ ...iv, source: "HUNTING" as const })),
+    ...icsRows,
+  ]
+    .sort((a, b) => {
+      const aAt = a.scheduledAt ? new Date(a.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+      const bAt = b.scheduledAt ? new Date(b.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+      return aAt - bAt;
+    })
+    .slice(0, 500);
+
   return res.json({ data });
 });
 
 adminRouter.get("/transactions", async (req, res) => {
   const userId = typeof req.query.userId === "string" ? req.query.userId : undefined;
   const typeParsed = z.enum(["INCOME", "EXPENSE"]).safeParse(req.query.type);
+  const timeZone = await resolveActorTimeZone(req, userId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
   const data = await prisma.transaction.findMany({
     where: {
       ...(userId ? { userId } : {}),
       ...(typeParsed.success ? { type: typeParsed.data } : {}),
+      occurredAt: range,
     },
     include: {
       user: { select: { id: true, name: true, email: true } },
@@ -178,6 +380,7 @@ adminRouter.get("/users", async (_req, res) => {
           huntingInterviews: true,
           transactions: true,
           discussions: true,
+          chatMessages: true,
           events: true,
         },
       },
@@ -290,6 +493,7 @@ adminRouter.patch("/users/:id", async (req, res) => {
           huntingInterviews: true,
           transactions: true,
           discussions: true,
+          chatMessages: true,
           events: true,
         },
       },
@@ -340,7 +544,7 @@ adminRouter.get("/users/:id", async (req, res) => {
         include: { profile: { select: { id: true, name: true } } },
       },
       huntingInterviews: {
-        orderBy: { updatedAt: "desc" },
+        orderBy: [{ scheduledAt: "asc" }, { updatedAt: "desc" }],
         take: 100,
         include: { profile: { select: { id: true, name: true } } },
       },
@@ -350,6 +554,13 @@ adminRouter.get("/users/:id", async (req, res) => {
         include: { replies: { orderBy: { createdAt: "asc" } } },
         orderBy: { updatedAt: "desc" },
         take: 50,
+      },
+      chatMessages: {
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        include: {
+          room: { select: { id: true, name: true, slug: true } },
+        },
       },
     },
   });
