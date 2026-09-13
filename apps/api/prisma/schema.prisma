@@ -95,27 +95,33 @@ enum JobDayItemStatus {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  name         String
-  role         Role     @default(USER)
-  locale       String   @default("en")
-  timeZone     String   @default("")
-  avatarUrl    String?
-  disabled     Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  passwordHash         String
+  name                 String
+  role                 Role      @default(USER)
+  locale               String    @default("en")
+  timeZone             String    @default("Asia/Tokyo")
+  avatarUrl            String?
+  disabled             Boolean   @default(false)
+  passwordResetToken   String?   @unique
+  passwordResetExpires DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   jobs          Job[]
   huntingProfiles HuntingProfile[]
   huntingBids     HuntingBid[]
   huntingInterviews HuntingInterview[]
+  interviewProgress InterviewProgress[]
+  interviewProgressOptions InterviewProgressOption[]
   capturedJobs    CapturedJob[]
   events        CalendarEvent[]
   transactions  Transaction[]
   discussions   Discussion[]
   replies       DiscussionReply[]
+  chatRoomsCreated ChatRoom[]
+  chatMessages     ChatMessage[]
   jobDayLogs    JobDayLog[]
   calendarConnections CalendarConnection[]
   calendarIcsFeeds    CalendarIcsFeed[]
@@ -176,6 +182,8 @@ model HuntingProfile {
   userId           String
   name             String
   label            String    @default("")
+  /** Target market / region for this profile (e.g. US, Japan) */
+  country          String    @default("")
   active           Boolean   @default(true)
   /** Google Spreadsheet URL or id (bid-bot compatible) */
   spreadsheetUrl   String    @default("")
@@ -193,9 +201,12 @@ model HuntingProfile {
   user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   bids         HuntingBid[]
   interviews   HuntingInterview[]
+  interviewProgress InterviewProgress[]
   capturedJobs CapturedJob[]
+  icsFeed      CalendarIcsFeed?
 
   @@index([userId])
+  @@index([userId, country])
 }
 
 model CapturedJob {
@@ -272,6 +283,51 @@ model HuntingInterview {
   @@index([userId])
   @@index([profileId])
   @@index([bidId])
+}
+
+enum InterviewProgressOptionKind {
+  STEP
+  STATUS
+}
+
+/** Per-user editable dropdown values for Interview Progress (step / status). */
+model InterviewProgressOption {
+  id        String                      @id @default(cuid())
+  userId    String
+  kind      InterviewProgressOptionKind
+  label     String
+  sortOrder Int                         @default(0)
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, label])
+  @@index([userId, kind, sortOrder])
+}
+
+/** Manual interview progress tracking (CRUD) under Job Hunting. */
+model InterviewProgress {
+  id            String    @id @default(cuid())
+  userId        String
+  profileId     String?
+  jobTitle      String
+  company       String
+  jobSiteSource String    @default("")
+  salary        String    @default("")
+  step          String    @default("")
+  status        String    @default("")
+  scheduledAt   DateTime?
+  notes         String    @default("")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile HuntingProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([profileId])
+  @@index([userId, scheduledAt])
 }
 
 model CalendarEvent {
@@ -363,6 +419,8 @@ model CalendarShare {
 model CalendarIcsFeed {
   id         String    @id @default(cuid())
   userId     String
+  /** Linked hunting profile so the calendar also appears in Bid Tracking */
+  profileId  String?   @unique
   url        String
   label      String    @default("Outlook")
   color      String    @default("#6366f1")
@@ -370,7 +428,8 @@ model CalendarIcsFeed {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile HuntingProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
 
   @@unique([userId, url])
   @@index([userId])
@@ -421,4 +480,34 @@ model DiscussionReply {
   author     User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
 
   @@index([discussionId])
+}
+
+/** Shared real-time channels (Discuss module). */
+model ChatRoom {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User          @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+
+  @@index([createdAt])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  roomId    String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+
+  room   ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  author User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([roomId, createdAt])
+  @@index([authorId])
 }
