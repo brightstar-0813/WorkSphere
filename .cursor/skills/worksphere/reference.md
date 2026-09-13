@@ -20,7 +20,7 @@ JobDayItem
 HuntingProfile (job hunting identity)
   id, userId, name, label?, active, spreadsheetUrl?, sheetsWebAppUrl?, sheetSyncedAt?
 
-CapturedJob (job fetch inbox per profile — from sf-job-capture bot / CSV / manual)
+CapturedJob (New jobs inbox per profile — file upload/import, job detail post, sf-job-capture bot)
   id, userId, profileId, externalId?, platform?, title, company, sourceUrl?, salary?, description?, status (NEW|QUEUED|DISMISSED|BIDDED)
 
 HuntingProfile …
@@ -51,6 +51,12 @@ Discussion
 
 DiscussionReply
   id, discussionId, authorId, body, createdAt
+
+ChatRoom (Discuss — shared real-time channels)
+  id, name, slug, description?, createdById, createdAt
+
+ChatMessage
+  id, roomId, authorId, body, createdAt
 ```
 
 ## Capture & bid bot (post-MVP shape)

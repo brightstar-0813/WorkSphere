@@ -16,6 +16,8 @@ export type ListMeta = {
   total: number;
   totalPages: number;
   countsByStatus?: Record<string, number>;
+  hasMore?: boolean;
+  nextBefore?: string | null;
 };
 
 const TOKEN_KEY = "worksphere_token";
