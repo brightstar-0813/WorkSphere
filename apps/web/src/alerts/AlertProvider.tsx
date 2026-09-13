@@ -23,7 +23,15 @@ import {
   type AlertToast,
   type ToastTone,
 } from "./notify";
+import { ToastGlyph } from "./ToastGlyph";
 import { useAuth } from "../auth";
+import {
+  connectChatSocket,
+  disconnectChatSocket,
+  setChatNotifyHandler,
+  shouldSuppressChatToast,
+  type ChatNotifyPayload,
+} from "../chat";
 
 export type NotifyInput = {
   title: string;
@@ -48,12 +56,14 @@ type AlertState = {
 const AlertContext = createContext<AlertState | null>(null);
 const POLL_MS = 20_000;
 const MAX_TOASTS = 4;
+const EXIT_MS = 280;
 
-function sourceMark(sourceType?: string) {
-  if (sourceType === "JOB") return "J";
-  if (sourceType === "HUNTING") return "H";
-  if (sourceType === "TRANSACTION") return "$";
-  return "W";
+function toneLabelKey(tone: ToastTone) {
+  if (tone === "success") return "alerts.toneSuccess";
+  if (tone === "warning") return "alerts.toneWarning";
+  if (tone === "danger") return "alerts.toneDanger";
+  if (tone === "schedule") return "alerts.toneSchedule";
+  return "alerts.toneInfo";
 }
 
 export function AlertProvider({ children }: { children: ReactNode }) {
@@ -64,6 +74,10 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   );
   const timers = useRef<Map<string, number>>(new Map());
+  const remaining = useRef<Map<string, number>>(new Map());
+  const startedAt = useRef<Map<string, number>>(new Map());
+  const paused = useRef<Set<string>>(new Set());
+  const exiting = useRef<Set<string>>(new Set());
 
   const clearTimer = useCallback((id: string) => {
     const handle = timers.current.get(id);
@@ -73,27 +87,84 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const dismiss = useCallback(
+  const removeToast = useCallback(
     (id: string) => {
       clearTimer(id);
+      remaining.current.delete(id);
+      startedAt.current.delete(id);
+      paused.current.delete(id);
+      exiting.current.delete(id);
       setToasts((list) => list.filter((x) => x.id !== id));
     },
     [clearTimer]
   );
 
+  const dismiss = useCallback(
+    (id: string) => {
+      if (exiting.current.has(id)) return;
+      clearTimer(id);
+      exiting.current.add(id);
+      setToasts((list) => list.map((x) => (x.id === id ? { ...x, exiting: true } : x)));
+      window.setTimeout(() => removeToast(id), EXIT_MS);
+    },
+    [clearTimer, removeToast]
+  );
+
   const dismissAll = useCallback(() => {
-    for (const id of timers.current.keys()) clearTimer(id);
-    setToasts([]);
-  }, [clearTimer]);
+    setToasts((list) => {
+      for (const toast of list) {
+        if (exiting.current.has(toast.id)) continue;
+        clearTimer(toast.id);
+        exiting.current.add(toast.id);
+        window.setTimeout(() => removeToast(toast.id), EXIT_MS);
+      }
+      return list.map((x) => (x.exiting ? x : { ...x, exiting: true }));
+    });
+  }, [clearTimer, removeToast]);
 
   const scheduleDismiss = useCallback(
     (id: string, durationMs: number) => {
       clearTimer(id);
       if (durationMs <= 0) return;
+      remaining.current.set(id, durationMs);
+      startedAt.current.set(id, Date.now());
+      paused.current.delete(id);
       const handle = window.setTimeout(() => dismiss(id), durationMs);
       timers.current.set(id, handle);
     },
     [clearTimer, dismiss]
+  );
+
+  const pauseToast = useCallback(
+    (id: string) => {
+      if (paused.current.has(id) || exiting.current.has(id)) return;
+      const left = remaining.current.get(id);
+      const start = startedAt.current.get(id);
+      if (left == null || start == null) return;
+      const elapsed = Date.now() - start;
+      remaining.current.set(id, Math.max(0, left - elapsed));
+      clearTimer(id);
+      paused.current.add(id);
+      setToasts((list) => list.map((x) => (x.id === id ? { ...x, paused: true } : x)));
+    },
+    [clearTimer]
+  );
+
+  const resumeToast = useCallback(
+    (id: string) => {
+      if (!paused.current.has(id) || exiting.current.has(id)) return;
+      const left = remaining.current.get(id) ?? 0;
+      paused.current.delete(id);
+      setToasts((list) => list.map((x) => (x.id === id ? { ...x, paused: false } : x)));
+      if (left <= 0) {
+        dismiss(id);
+        return;
+      }
+      startedAt.current.set(id, Date.now());
+      const handle = window.setTimeout(() => dismiss(id), left);
+      timers.current.set(id, handle);
+    },
+    [dismiss]
   );
 
   const notify = useCallback(
@@ -204,11 +275,69 @@ export function AlertProvider({ children }: { children: ReactNode }) {
   }, [user, scan]);
 
   useEffect(() => {
+    if (!user) {
+      setChatNotifyHandler(null);
+      disconnectChatSocket();
+      return;
+    }
+
+    connectChatSocket();
+    setChatNotifyHandler((msg: ChatNotifyPayload) => {
+      if (msg.author.id === user.id) return;
+      if (shouldSuppressChatToast(msg.roomId)) return;
+
+      const preview =
+        msg.body.length > 140 ? `${msg.body.slice(0, 137).trimEnd()}…` : msg.body;
+      const href = `/discuss?room=${encodeURIComponent(msg.roomId)}`;
+
+      notify({
+        title: t("discuss.toastMessageTitle", {
+          name: msg.author.name,
+          channel: msg.roomName || t("discuss.heading"),
+        }),
+        body: preview,
+        tone: "info",
+        durationMs: 8000,
+        actionLabel: t("discuss.openChannel"),
+        actionHref: href,
+        eventId: `chat-${msg.id}`,
+      });
+
+      if (document.visibilityState === "hidden") {
+        showSystemNotification(
+          t("discuss.toastMessageTitle", {
+            name: msg.author.name,
+            channel: msg.roomName || t("discuss.heading"),
+          }),
+          preview,
+          `ws-chat-${msg.roomId}`,
+          href
+        );
+      }
+    });
+
+    return () => {
+      setChatNotifyHandler(null);
+    };
+  }, [user, notify, t]);
+
+  useEffect(() => {
     return () => {
       for (const handle of timers.current.values()) window.clearTimeout(handle);
       timers.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (document.querySelector('[role="alertdialog"]')) return;
+      const top = toasts.find((x) => !x.exiting);
+      if (top) dismiss(top.id);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dismiss, toasts]);
 
   const value = useMemo(
     () => ({ toasts, permission, requestPermission, notify, dismiss, dismissAll }),
@@ -218,15 +347,23 @@ export function AlertProvider({ children }: { children: ReactNode }) {
   return (
     <AlertContext.Provider value={value}>
       {children}
-      <AlertToaster />
+      <AlertToaster onPause={pauseToast} onResume={resumeToast} />
     </AlertContext.Provider>
   );
 }
 
-function AlertToaster() {
+function AlertToaster({
+  onPause,
+  onResume,
+}: {
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
+}) {
   const { t } = useTranslation();
   const ctx = useContext(AlertContext);
   if (!ctx || ctx.toasts.length === 0) return null;
+
+  const visible = ctx.toasts.filter((x) => !x.exiting).length;
 
   return (
     <div
@@ -242,9 +379,11 @@ function AlertToaster() {
           toast={toast}
           index={index}
           onDismiss={() => ctx.dismiss(toast.id)}
+          onPause={() => onPause(toast.id)}
+          onResume={() => onResume(toast.id)}
         />
       ))}
-      {ctx.toasts.length > 1 && (
+      {visible > 1 && (
         <button type="button" className="toast-clear-all" onClick={ctx.dismissAll}>
           {t("alerts.dismissAll")}
         </button>
@@ -257,10 +396,14 @@ function ToastCard({
   toast,
   index,
   onDismiss,
+  onPause,
+  onResume,
 }: {
   toast: AlertToast;
   index: number;
   onDismiss: () => void;
+  onPause: () => void;
+  onResume: () => void;
 }) {
   const { t } = useTranslation();
   const reducedMotion =
@@ -269,22 +412,32 @@ function ToastCard({
 
   return (
     <article
-      className={`toast-card tone-${toast.tone}`}
+      className={`toast-card tone-${toast.tone}${toast.exiting ? " is-exiting" : ""}${
+        toast.paused ? " is-paused" : ""
+      }`}
       style={{ ["--toast-i" as string]: String(index) }}
       role="status"
+      onMouseEnter={onPause}
+      onMouseLeave={onResume}
+      onFocus={onPause}
+      onBlur={onResume}
     >
+      <span className="toast-rail" aria-hidden="true" />
       <div className="toast-glow" aria-hidden="true" />
       <header className="toast-head">
         <div className="toast-brand">
-          <Logo size={18} />
+          <Logo size={16} />
           <span>{t("alerts.systemTitle")}</span>
         </div>
-        <span className="toast-time tabular">{toast.timeLabel}</span>
+        <div className="toast-meta">
+          <span className={`toast-tone-chip tone-${toast.tone}`}>{t(toneLabelKey(toast.tone))}</span>
+          <span className="toast-time tabular">{toast.timeLabel}</span>
+        </div>
       </header>
 
       <div className="toast-body">
-        <div className={`toast-mark src-${(toast.sourceType ?? "manual").toLowerCase()}`}>
-          {sourceMark(toast.sourceType)}
+        <div className={`toast-mark tone-${toast.tone}`} aria-hidden="true">
+          <ToastGlyph tone={toast.tone} />
         </div>
         <div className="toast-copy">
           <strong className="toast-title">{toast.title}</strong>
@@ -312,7 +465,10 @@ function ToastCard({
 
       {toast.durationMs > 0 && !reducedMotion && (
         <div className="toast-progress" aria-hidden="true">
-          <span style={{ animationDuration: `${toast.durationMs}ms` }} />
+          <span
+            className={toast.paused ? "is-paused" : undefined}
+            style={{ animationDuration: `${toast.durationMs}ms` }}
+          />
         </div>
       )}
     </article>

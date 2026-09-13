@@ -13,6 +13,8 @@ export type AlertToast = {
   durationMs: number;
   actionLabel?: string;
   actionHref?: string;
+  exiting?: boolean;
+  paused?: boolean;
 };
 
 const FIRED_KEY = "worksphere_alert_fired";
@@ -54,7 +56,12 @@ export async function ensureNotificationPermission(): Promise<NotificationPermis
   return Notification.requestPermission();
 }
 
-export function showSystemNotification(title: string, body: string, tag: string) {
+export function showSystemNotification(
+  title: string,
+  body: string,
+  tag: string,
+  href = "/calendar"
+) {
   if (typeof window === "undefined" || !("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
   try {
@@ -67,8 +74,8 @@ export function showSystemNotification(title: string, body: string, tag: string)
     n.onclick = () => {
       window.focus();
       n.close();
-      if (!window.location.pathname.startsWith("/calendar")) {
-        window.location.assign("/calendar");
+      if (!window.location.pathname.startsWith(href.split("?")[0] ?? href)) {
+        window.location.assign(href);
       }
     };
   } catch {
