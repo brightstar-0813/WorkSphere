@@ -30,6 +30,8 @@ type ChatRoom = {
   name: string;
   slug: string;
   description: string | null;
+  hasPassword: boolean;
+  unlocked: boolean;
   createdAt: string;
   createdBy: { id: string; name: string };
   messageCount: number;
@@ -83,6 +85,15 @@ function sameDay(a: string, b: string) {
   );
 }
 
+function isLockedError(err: unknown) {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "LOCKED"
+  );
+}
+
 export function DiscussPage() {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
@@ -100,6 +111,16 @@ export function DiscussPage() {
   const [newChannelOpen, setNewChannelOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [editChannelOpen, setEditChannelOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+  const [clearPassword, setClearPassword] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingBody, setEditingBody] = useState("");
   const [presence, setPresence] = useState<ChatPresenceUser[]>([]);
   const [typingNames, setTypingNames] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
@@ -113,8 +134,15 @@ export function DiscussPage() {
   const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingIdleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeIdRef = useRef<string | null>(null);
+  const userIdRef = useRef(user?.id);
+  const userRoleRef = useRef(user?.role);
+  const roomsRef = useRef(rooms);
   const [atBottom, setAtBottom] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
+
+  userIdRef.current = user?.id;
+  userRoleRef.current = user?.role;
+  roomsRef.current = rooms;
 
   const scrollElToEnd = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = scrollerRef.current;
@@ -168,6 +196,8 @@ export function DiscussPage() {
     Boolean(user) &&
     Boolean(activeRoom) &&
     (user!.role === "ADMIN" || activeRoom!.createdBy.id === user!.id);
+  const needsUnlock = Boolean(activeRoom?.hasPassword && !activeRoom.unlocked);
+  const activeUnlocked = activeRoom ? activeRoom.unlocked : true;
 
   const loadRooms = useCallback(async () => {
     setLoadingRooms(true);
@@ -192,6 +222,12 @@ export function DiscussPage() {
   }, [loadRooms]);
 
   useEffect(() => {
+    setEditChannelOpen(false);
+    setUnlockPassword("");
+    setEditingMessageId(null);
+  }, [activeId]);
+
+  useEffect(() => {
     const socket = connectChatSocket();
     if (!socket) return;
 
@@ -209,7 +245,7 @@ export function DiscussPage() {
       if (msg.roomId !== activeIdRef.current) {
         setRooms((prev) =>
           prev.map((r) =>
-            r.id === msg.roomId
+            r.id === msg.roomId && r.unlocked
               ? {
                   ...r,
                   messageCount: r.messageCount + 1,
@@ -220,13 +256,15 @@ export function DiscussPage() {
                     author: msg.author,
                   },
                 }
-              : r,
+              : r.id === msg.roomId
+                ? { ...r, messageCount: r.messageCount + 1 }
+                : r,
           ),
         );
         return;
       }
       setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-      if (!stickBottomRef.current && msg.author.id !== user?.id) {
+      if (!stickBottomRef.current && msg.author.id !== userIdRef.current) {
         setUnseenCount((n) => n + 1);
       }
       setRooms((prev) =>
@@ -246,11 +284,23 @@ export function DiscussPage() {
         ),
       );
     };
+    const onMessageUpdated = (msg: ChatMessage) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, body: msg.body, editedAt: msg.editedAt } : m)),
+      );
+      setRooms((prev) =>
+        prev.map((r) =>
+          r.lastMessage?.id === msg.id
+            ? { ...r, lastMessage: { ...r.lastMessage, body: msg.body } }
+            : r,
+        ),
+      );
+    };
     const onPresence = (payload: { roomId: string; users: ChatPresenceUser[] }) => {
       if (payload.roomId === activeIdRef.current) setPresence(payload.users);
     };
     const onTyping = (payload: { roomId: string; userId: string; name: string; typing: boolean }) => {
-      if (payload.roomId !== activeIdRef.current || payload.userId === user?.id) return;
+      if (payload.roomId !== activeIdRef.current || payload.userId === userIdRef.current) return;
       setTypingNames((prev) => {
         const next = new Set(prev);
         if (payload.typing) next.add(payload.name);
@@ -284,14 +334,52 @@ export function DiscussPage() {
         setPresence([]);
       }
     };
+    const onRoomUpdated = (payload: {
+      id: string;
+      name: string;
+      description: string | null;
+      hasPassword: boolean;
+      passwordChanged?: boolean;
+    }) => {
+      setRooms((prev) =>
+        prev.map((r) => {
+          if (r.id !== payload.id) return r;
+          const manages =
+            userRoleRef.current === "ADMIN" || r.createdBy.id === userIdRef.current;
+          let unlocked = r.unlocked;
+          if (!payload.hasPassword) unlocked = true;
+          else if (payload.passwordChanged) unlocked = Boolean(manages);
+          return {
+            ...r,
+            name: payload.name,
+            description: payload.description,
+            hasPassword: payload.hasPassword,
+            unlocked,
+            lastMessage: unlocked ? r.lastMessage : null,
+          };
+        }),
+      );
+      if (payload.id === activeIdRef.current && payload.passwordChanged && payload.hasPassword) {
+        const room = roomsRef.current.find((r) => r.id === payload.id);
+        const manages =
+          userRoleRef.current === "ADMIN" || room?.createdBy.id === userIdRef.current;
+        if (!manages) {
+          setMessages([]);
+          setPresence([]);
+          leaveChannel(payload.id);
+        }
+      }
+    };
 
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.on("message:new", onMessage);
+    socket.on("message:updated", onMessageUpdated);
     socket.on("presence:update", onPresence);
     socket.on("typing", onTyping);
     socket.on("room:cleared", onCleared);
     socket.on("room:deleted", onDeleted);
+    socket.on("room:updated", onRoomUpdated);
     setConnected(socket.connected);
     if (socket.connected) onConnect();
 
@@ -299,14 +387,16 @@ export function DiscussPage() {
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("message:new", onMessage);
+      socket.off("message:updated", onMessageUpdated);
       socket.off("presence:update", onPresence);
       socket.off("typing", onTyping);
       socket.off("room:cleared", onCleared);
       socket.off("room:deleted", onDeleted);
+      socket.off("room:updated", onRoomUpdated);
       if (typingClearRef.current) clearTimeout(typingClearRef.current);
       if (typingIdleRef.current) clearTimeout(typingIdleRef.current);
     };
-  }, [user?.id]);
+  }, []);
 
   useEffect(() => {
     if (!activeId) {
@@ -315,6 +405,15 @@ export function DiscussPage() {
       setTypingNames([]);
       setUnseenCount(0);
       setAtBottom(true);
+      return;
+    }
+
+    if (!activeUnlocked) {
+      setMessages([]);
+      setPresence([]);
+      setHasMore(false);
+      setLoadingMessages(false);
+      leaveChannel(activeId);
       return;
     }
 
@@ -337,7 +436,15 @@ export function DiscussPage() {
         const join = await joinChannel(roomId);
         if (!cancelled && join.users) setPresence(join.users);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : t("discuss.error"));
+        if (cancelled) return;
+        if (isLockedError(e)) {
+          setRooms((prev) =>
+            prev.map((r) => (r.id === roomId ? { ...r, unlocked: false, lastMessage: null } : r)),
+          );
+          setMessages([]);
+          return;
+        }
+        setError(e instanceof Error ? e.message : t("discuss.error"));
       } finally {
         if (!cancelled) setLoadingMessages(false);
       }
@@ -349,12 +456,12 @@ export function DiscussPage() {
       cancelled = true;
       leaveChannel(roomId);
     };
-  }, [activeId, t]);
+  }, [activeId, activeUnlocked, t]);
 
   useLayoutEffect(() => {
-    if (!stickBottomRef.current || loadingMessages) return;
+    if (!stickBottomRef.current || loadingMessages || needsUnlock) return;
     scrollElToEnd("auto");
-  }, [messages, typingNames, loadingMessages, activeId, scrollElToEnd]);
+  }, [messages, typingNames, loadingMessages, activeId, needsUnlock, scrollElToEnd]);
 
   function onScroll() {
     const el = scrollerRef.current;
@@ -367,7 +474,7 @@ export function DiscussPage() {
   }
 
   async function loadOlder() {
-    if (!activeId || !hasMore || loadingOlder || messages.length === 0) return;
+    if (!activeId || !hasMore || loadingOlder || messages.length === 0 || needsUnlock) return;
     const el = scrollerRef.current;
     const prevHeight = el?.scrollHeight ?? 0;
     const oldestId = messages[0]?.id;
@@ -398,24 +505,124 @@ export function DiscussPage() {
     e.preventDefault();
     const name = newName.trim();
     if (!name) return;
+    const password = newPassword.trim();
+    if (password && password.length < 4) {
+      setError(t("discuss.passwordTooShort"));
+      return;
+    }
     try {
       const room = await api<ChatRoom>("/chat/rooms", {
         method: "POST",
-        body: JSON.stringify({ name, description: newDesc.trim() || null }),
+        body: JSON.stringify({
+          name,
+          description: newDesc.trim() || null,
+          password: password || null,
+        }),
       });
-      setRooms((prev) => [...prev, { ...room, messageCount: 0, lastMessage: null }]);
+      setRooms((prev) => [
+        ...prev,
+        {
+          ...room,
+          hasPassword: Boolean(room.hasPassword),
+          unlocked: true,
+          messageCount: 0,
+          lastMessage: null,
+        },
+      ]);
       setActiveId(room.id);
       setNewName("");
       setNewDesc("");
+      setNewPassword("");
       setNewChannelOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("discuss.error"));
     }
   }
 
+  function openEditChannel() {
+    if (!activeRoom) return;
+    setEditName(activeRoom.name);
+    setEditDesc(activeRoom.description ?? "");
+    setEditPassword("");
+    setClearPassword(false);
+    setEditChannelOpen(true);
+  }
+
+  async function onSaveChannel(e: FormEvent) {
+    e.preventDefault();
+    if (!activeRoom || !canManageActive || busyAction) return;
+    const name = editName.trim();
+    if (!name) return;
+    const password = editPassword.trim();
+    if (password && password.length < 4) {
+      setError(t("discuss.passwordTooShort"));
+      return;
+    }
+    setBusyAction(true);
+    setError(null);
+    try {
+      const body: { name: string; description: string | null; password?: string | null } = {
+        name,
+        description: editDesc.trim() || null,
+      };
+      if (clearPassword) body.password = null;
+      else if (password) body.password = password;
+
+      const room = await api<ChatRoom>(`/chat/rooms/${activeRoom.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      setRooms((prev) =>
+        prev.map((r) =>
+          r.id === room.id
+            ? {
+                ...r,
+                ...room,
+                messageCount: r.messageCount,
+                lastMessage: room.unlocked ? r.lastMessage : null,
+              }
+            : r,
+        ),
+      );
+      setEditChannelOpen(false);
+      notify({
+        title: t("discuss.toastEditedTitle"),
+        body: t("discuss.toastEditedBody", { name: room.name }),
+        tone: "success",
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("discuss.error"));
+    } finally {
+      setBusyAction(false);
+    }
+  }
+
+  async function onUnlock(e: FormEvent) {
+    e.preventDefault();
+    if (!activeRoom || unlockBusy) return;
+    const password = unlockPassword.trim();
+    if (!password) return;
+    setUnlockBusy(true);
+    setError(null);
+    try {
+      await api(`/chat/rooms/${activeRoom.id}/unlock`, {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      setRooms((prev) =>
+        prev.map((r) => (r.id === activeRoom.id ? { ...r, unlocked: true } : r)),
+      );
+      setUnlockPassword("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("discuss.wrongPassword"));
+    } finally {
+      setUnlockBusy(false);
+    }
+  }
+
   function onDraftChange(value: string) {
     setDraft(value);
-    if (!activeId) return;
+    if (!activeId || needsUnlock) return;
     emitTyping(activeId, true);
     if (typingIdleRef.current) clearTimeout(typingIdleRef.current);
     typingIdleRef.current = setTimeout(() => {
@@ -486,14 +693,16 @@ export function DiscussPage() {
   async function onSend(e: FormEvent) {
     e.preventDefault();
     const body = draft.trim();
-    if (!body || !activeId) return;
+    if (!body || !activeId || needsUnlock) return;
     setDraft("");
     setError(null);
     emitTyping(activeId, false);
     const result = await sendChatMessage(activeId, body);
     if (!result.ok) {
       setDraft(body);
-      setError(t("discuss.sendFailed"));
+      setError(
+        result.error === "LOCKED" ? t("discuss.lockedHint") : t("discuss.sendFailed"),
+      );
       return;
     }
     stickBottomRef.current = true;
@@ -501,6 +710,49 @@ export function DiscussPage() {
     setUnseenCount(0);
     setMessages((prev) => (prev.some((m) => m.id === result.data.id) ? prev : [...prev, result.data]));
     requestAnimationFrame(() => scrollElToEnd("smooth"));
+  }
+
+  function startEditMessage(msg: ChatMessage) {
+    setEditingMessageId(msg.id);
+    setEditingBody(msg.body);
+  }
+
+  async function onSaveMessage(e: FormEvent) {
+    e.preventDefault();
+    if (!activeId || !editingMessageId) return;
+    const body = editingBody.trim();
+    if (!body) return;
+    setBusyAction(true);
+    setError(null);
+    try {
+      const updated = await api<ChatMessage>(
+        `/chat/rooms/${activeId}/messages/${editingMessageId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ body }),
+        },
+      );
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === updated.id
+            ? { ...m, body: updated.body, editedAt: updated.editedAt ?? new Date().toISOString() }
+            : m,
+        ),
+      );
+      setRooms((prev) =>
+        prev.map((r) =>
+          r.lastMessage?.id === updated.id
+            ? { ...r, lastMessage: { ...r.lastMessage, body: updated.body } }
+            : r,
+        ),
+      );
+      setEditingMessageId(null);
+      setEditingBody("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("discuss.error"));
+    } finally {
+      setBusyAction(false);
+    }
   }
 
   return (
@@ -549,6 +801,16 @@ export function DiscussPage() {
                 placeholder={t("discuss.channelDesc")}
                 maxLength={280}
               />
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder={t("discuss.channelPassword")}
+                autoComplete="new-password"
+                minLength={4}
+                maxLength={72}
+              />
+              <p className="muted small">{t("discuss.channelPasswordHint")}</p>
               <button type="submit" className="btn primary">
                 {t("discuss.createChannel")}
               </button>
@@ -566,11 +828,18 @@ export function DiscussPage() {
                   className={`discuss-channel-item ${room.id === activeId ? "active" : ""}`}
                   onClick={() => setActiveId(room.id)}
                 >
-                  <span className="discuss-channel-name">{room.name}</span>
+                  <span className="discuss-channel-name">
+                    {room.hasPassword && (
+                      <span className="discuss-lock" title={t("discuss.protected")} aria-hidden />
+                    )}
+                    {room.name}
+                  </span>
                   <span className="muted small discuss-channel-preview">
-                    {room.lastMessage
-                      ? `${room.lastMessage.author.name}: ${room.lastMessage.body}`
-                      : t("discuss.emptyChannel")}
+                    {room.hasPassword && !room.unlocked
+                      ? t("discuss.lockedPreview")
+                      : room.lastMessage
+                        ? `${room.lastMessage.author.name}: ${room.lastMessage.body}`
+                        : t("discuss.emptyChannel")}
                   </span>
                 </button>
               </li>
@@ -589,7 +858,12 @@ export function DiscussPage() {
             <>
               <header className="discuss-stage-head">
                 <div>
-                  <h2>{activeRoom.name}</h2>
+                  <h2>
+                    {activeRoom.hasPassword && (
+                      <span className="discuss-lock" title={t("discuss.protected")} aria-hidden />
+                    )}
+                    {activeRoom.name}
+                  </h2>
                   {activeRoom.description && <p className="muted">{activeRoom.description}</p>}
                 </div>
                 <div className="discuss-stage-meta">
@@ -598,7 +872,19 @@ export function DiscussPage() {
                       <button
                         type="button"
                         className="btn"
-                        disabled={busyAction || (messages.length === 0 && activeRoom.messageCount === 0)}
+                        disabled={busyAction}
+                        onClick={() => (editChannelOpen ? setEditChannelOpen(false) : openEditChannel())}
+                      >
+                        {t("discuss.editChannel")}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={
+                          busyAction ||
+                          needsUnlock ||
+                          (messages.length === 0 && activeRoom.messageCount === 0)
+                        }
                         onClick={() => setConfirmAction("clear")}
                       >
                         {t("discuss.clearHistory")}
@@ -614,129 +900,269 @@ export function DiscussPage() {
                       </button>
                     </div>
                   )}
-                  <div className="discuss-presence" title={t("discuss.online")}>
-                    {presence.slice(0, 5).map((p) => (
-                      <span key={p.id} className="discuss-avatar" title={p.name}>
-                        {p.avatarUrl ? (
-                          <img src={mediaUrl(p.avatarUrl)} alt="" />
-                        ) : (
-                          initialsOf(p.name)
-                        )}
+                  {!needsUnlock && (
+                    <div className="discuss-presence" title={t("discuss.online")}>
+                      {presence.slice(0, 5).map((p) => (
+                        <span key={p.id} className="discuss-avatar" title={p.name}>
+                          {p.avatarUrl ? (
+                            <img src={mediaUrl(p.avatarUrl)} alt="" />
+                          ) : (
+                            initialsOf(p.name)
+                          )}
+                        </span>
+                      ))}
+                      {presence.length > 5 && (
+                        <span className="discuss-avatar more">+{presence.length - 5}</span>
+                      )}
+                      <span className="muted small">
+                        {t("discuss.onlineCount", { count: presence.length })}
                       </span>
-                    ))}
-                    {presence.length > 5 && (
-                      <span className="discuss-avatar more">+{presence.length - 5}</span>
-                    )}
-                    <span className="muted small">
-                      {t("discuss.onlineCount", { count: presence.length })}
-                    </span>
-                  </div>
+                    </div>
+                  )}
                 </div>
               </header>
 
-              <div className="discuss-stream-wrap">
-                <div className="discuss-stream" ref={scrollerRef} onScroll={onScroll}>
-                  {hasMore && (
+              {editChannelOpen && canManageActive && (
+                <form className="discuss-edit-channel stack" onSubmit={(e) => void onSaveChannel(e)}>
+                  <input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder={t("discuss.channelName")}
+                    required
+                    maxLength={80}
+                  />
+                  <input
+                    value={editDesc}
+                    onChange={(e) => setEditDesc(e.target.value)}
+                    placeholder={t("discuss.channelDesc")}
+                    maxLength={280}
+                  />
+                  <input
+                    type="password"
+                    value={editPassword}
+                    onChange={(e) => {
+                      setEditPassword(e.target.value);
+                      if (e.target.value) setClearPassword(false);
+                    }}
+                    placeholder={
+                      activeRoom.hasPassword
+                        ? t("discuss.changePassword")
+                        : t("discuss.channelPassword")
+                    }
+                    autoComplete="new-password"
+                    disabled={clearPassword}
+                    maxLength={72}
+                  />
+                  {activeRoom.hasPassword && (
+                    <label className="discuss-check">
+                      <input
+                        type="checkbox"
+                        checked={clearPassword}
+                        onChange={(e) => {
+                          setClearPassword(e.target.checked);
+                          if (e.target.checked) setEditPassword("");
+                        }}
+                      />
+                      {t("discuss.removePassword")}
+                    </label>
+                  )}
+                  <div className="discuss-actions">
+                    <button type="submit" className="btn primary" disabled={busyAction}>
+                      {t("common.save")}
+                    </button>
                     <button
                       type="button"
-                      className="btn discuss-load-older"
-                      disabled={loadingOlder}
-                      onClick={() => void loadOlder()}
+                      className="btn"
+                      disabled={busyAction}
+                      onClick={() => setEditChannelOpen(false)}
                     >
-                      {loadingOlder ? t("common.loading") : t("discuss.loadOlder")}
+                      {t("common.cancel")}
                     </button>
-                  )}
+                  </div>
+                </form>
+              )}
 
-                  {loadingMessages && <p className="muted discuss-stream-status">{t("common.loading")}</p>}
-
-                  {!loadingMessages && messages.length === 0 && (
-                    <p className="muted discuss-stream-status">{t("discuss.startConversation")}</p>
-                  )}
-
-                  {messages.map((msg, idx) => {
-                    const mine = msg.author.id === user?.id;
-                    const prev = messages[idx - 1];
-                    const showDay = !prev || !sameDay(prev.createdAt, msg.createdAt);
-                    const stack =
-                      prev &&
-                      prev.author.id === msg.author.id &&
-                      !showDay &&
-                      new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < 120_000;
-
-                    return (
-                      <div key={msg.id}>
-                        {showDay && (
-                          <div className="discuss-day">
-                            <span>{formatDay(msg.createdAt, i18n.language)}</span>
-                          </div>
-                        )}
-                        <article
-                          className={`discuss-msg ${mine ? "mine" : ""} ${stack ? "stack" : ""}`}
-                        >
-                          {!mine && !stack && (
-                            <div className="discuss-avatar lg" aria-hidden>
-                              {msg.author.avatarUrl ? (
-                                <img src={mediaUrl(msg.author.avatarUrl)} alt="" />
-                              ) : (
-                                initialsOf(msg.author.name)
-                              )}
-                            </div>
-                          )}
-                          {!mine && stack && <div className="discuss-avatar-spacer" />}
-                          <div className="discuss-bubble">
-                            {!mine && !stack && (
-                              <header>
-                                <strong>{msg.author.name}</strong>
-                                <time dateTime={msg.createdAt}>
-                                  {formatClock(msg.createdAt, i18n.language)}
-                                </time>
-                              </header>
-                            )}
-                            <p>{msg.body}</p>
-                            {(mine || stack) && (
-                              <time dateTime={msg.createdAt}>
-                                {formatClock(msg.createdAt, i18n.language)}
-                              </time>
-                            )}
-                          </div>
-                        </article>
-                      </div>
-                    );
-                  })}
-                  <div ref={bottomRef} className="discuss-stream-end" aria-hidden />
+              {needsUnlock ? (
+                <div className="discuss-locked">
+                  <p>{t("discuss.lockedHint")}</p>
+                  <form className="stack discuss-unlock" onSubmit={(e) => void onUnlock(e)}>
+                    <input
+                      type="password"
+                      value={unlockPassword}
+                      onChange={(e) => setUnlockPassword(e.target.value)}
+                      placeholder={t("discuss.unlockPassword")}
+                      autoComplete="current-password"
+                      required
+                      maxLength={72}
+                    />
+                    <button type="submit" className="btn primary" disabled={unlockBusy || !unlockPassword.trim()}>
+                      {unlockBusy ? t("common.loading") : t("discuss.unlock")}
+                    </button>
+                  </form>
                 </div>
+              ) : (
+                <>
+                  <div className="discuss-stream-wrap">
+                    <div className="discuss-stream" ref={scrollerRef} onScroll={onScroll}>
+                      {hasMore && (
+                        <button
+                          type="button"
+                          className="btn discuss-load-older"
+                          disabled={loadingOlder}
+                          onClick={() => void loadOlder()}
+                        >
+                          {loadingOlder ? t("common.loading") : t("discuss.loadOlder")}
+                        </button>
+                      )}
 
-                {!atBottom && (
-                  <button
-                    type="button"
-                    className="discuss-jump-latest"
-                    onClick={() => jumpToLatest("smooth")}
-                  >
-                    {unseenCount > 0
-                      ? t("discuss.newMessages", { count: unseenCount })
-                      : t("discuss.jumpLatest")}
-                  </button>
-                )}
-              </div>
+                      {loadingMessages && (
+                        <p className="muted discuss-stream-status">{t("common.loading")}</p>
+                      )}
 
-              <div className="discuss-typing" aria-live="polite">
-                {typingNames.length > 0
-                  ? t("discuss.typing", { names: typingNames.join(", ") })
-                  : "\u00a0"}
-              </div>
+                      {!loadingMessages && messages.length === 0 && (
+                        <p className="muted discuss-stream-status">{t("discuss.startConversation")}</p>
+                      )}
 
-              <form className="discuss-composer" onSubmit={(e) => void onSend(e)}>
-                <input
-                  value={draft}
-                  onChange={(e) => onDraftChange(e.target.value)}
-                  placeholder={t("discuss.placeholder")}
-                  maxLength={4000}
-                  aria-label={t("discuss.placeholder")}
-                />
-                <button type="submit" className="btn primary" disabled={!draft.trim()}>
-                  {t("discuss.send")}
-                </button>
-              </form>
+                      {messages.map((msg, idx) => {
+                        const mine = msg.author.id === user?.id;
+                        const canEditMsg = mine || user?.role === "ADMIN";
+                        const prev = messages[idx - 1];
+                        const showDay = !prev || !sameDay(prev.createdAt, msg.createdAt);
+                        const stack =
+                          prev &&
+                          prev.author.id === msg.author.id &&
+                          !showDay &&
+                          new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() <
+                            120_000;
+                        const isEditing = editingMessageId === msg.id;
+
+                        return (
+                          <div key={msg.id}>
+                            {showDay && (
+                              <div className="discuss-day">
+                                <span>{formatDay(msg.createdAt, i18n.language)}</span>
+                              </div>
+                            )}
+                            <article
+                              className={`discuss-msg ${mine ? "mine" : ""} ${stack ? "stack" : ""}`}
+                            >
+                              {!mine && !stack && (
+                                <div className="discuss-avatar lg" aria-hidden>
+                                  {msg.author.avatarUrl ? (
+                                    <img src={mediaUrl(msg.author.avatarUrl)} alt="" />
+                                  ) : (
+                                    initialsOf(msg.author.name)
+                                  )}
+                                </div>
+                              )}
+                              {!mine && stack && <div className="discuss-avatar-spacer" />}
+                              <div className="discuss-bubble">
+                                {!mine && !stack && (
+                                  <header>
+                                    <strong>{msg.author.name}</strong>
+                                    <time dateTime={msg.createdAt}>
+                                      {formatClock(msg.createdAt, i18n.language)}
+                                    </time>
+                                  </header>
+                                )}
+                                {isEditing ? (
+                                  <form
+                                    className="discuss-msg-edit"
+                                    onSubmit={(e) => void onSaveMessage(e)}
+                                  >
+                                    <textarea
+                                      value={editingBody}
+                                      onChange={(e) => setEditingBody(e.target.value)}
+                                      maxLength={4000}
+                                      rows={3}
+                                      autoFocus
+                                    />
+                                    <div className="discuss-actions">
+                                      <button
+                                        type="submit"
+                                        className="btn primary"
+                                        disabled={busyAction || !editingBody.trim()}
+                                      >
+                                        {t("common.save")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn"
+                                        disabled={busyAction}
+                                        onClick={() => {
+                                          setEditingMessageId(null);
+                                          setEditingBody("");
+                                        }}
+                                      >
+                                        {t("common.cancel")}
+                                      </button>
+                                    </div>
+                                  </form>
+                                ) : (
+                                  <>
+                                    <p>{msg.body}</p>
+                                    <div className="discuss-msg-meta">
+                                      {(mine || stack) && (
+                                        <time dateTime={msg.createdAt}>
+                                          {formatClock(msg.createdAt, i18n.language)}
+                                        </time>
+                                      )}
+                                      {msg.editedAt && (
+                                        <span className="muted small">{t("discuss.edited")}</span>
+                                      )}
+                                      {canEditMsg && (
+                                        <button
+                                          type="button"
+                                          className="discuss-msg-edit-btn"
+                                          onClick={() => startEditMessage(msg)}
+                                        >
+                                          {t("discuss.editMessage")}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            </article>
+                          </div>
+                        );
+                      })}
+                      <div ref={bottomRef} className="discuss-stream-end" aria-hidden />
+                    </div>
+
+                    {!atBottom && (
+                      <button
+                        type="button"
+                        className="discuss-jump-latest"
+                        onClick={() => jumpToLatest("smooth")}
+                      >
+                        {unseenCount > 0
+                          ? t("discuss.newMessages", { count: unseenCount })
+                          : t("discuss.jumpLatest")}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="discuss-typing" aria-live="polite">
+                    {typingNames.length > 0
+                      ? t("discuss.typing", { names: typingNames.join(", ") })
+                      : "\u00a0"}
+                  </div>
+
+                  <form className="discuss-composer" onSubmit={(e) => void onSend(e)}>
+                    <input
+                      value={draft}
+                      onChange={(e) => onDraftChange(e.target.value)}
+                      placeholder={t("discuss.placeholder")}
+                      maxLength={4000}
+                      aria-label={t("discuss.placeholder")}
+                    />
+                    <button type="submit" className="btn primary" disabled={!draft.trim()}>
+                      {t("discuss.send")}
+                    </button>
+                  </form>
+                </>
+              )}
             </>
           )}
         </div>

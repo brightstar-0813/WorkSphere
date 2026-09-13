@@ -46,16 +46,30 @@ async function request<T>(
   if (res.status === 204) return { data: undefined as T };
 
   const text = await res.text();
-  let body: { data?: T; meta?: ListMeta; error?: { message?: string } } | null = null;
+  let body: {
+    data?: T;
+    meta?: ListMeta;
+    error?: { code?: string; message?: string };
+  } | null = null;
   if (text) {
     try {
-      body = JSON.parse(text) as { data?: T; meta?: ListMeta; error?: { message?: string } };
+      body = JSON.parse(text) as {
+        data?: T;
+        meta?: ListMeta;
+        error?: { code?: string; message?: string };
+      };
     } catch {
       throw new Error(res.ok ? "Invalid response" : `Request failed (${res.status})`);
     }
   }
   if (!res.ok) {
-    throw new Error(body?.error?.message ?? `Request failed (${res.status})`);
+    const err = new Error(body?.error?.message ?? `Request failed (${res.status})`) as Error & {
+      code?: string;
+      status?: number;
+    };
+    err.code = body?.error?.code;
+    err.status = res.status;
+    throw err;
   }
   return { data: body?.data as T, meta: body?.meta };
 }

@@ -13,6 +13,7 @@ export type ChatMessage = {
   roomId: string;
   body: string;
   createdAt: string;
+  editedAt?: string | null;
   author: ChatAuthor;
 };
 

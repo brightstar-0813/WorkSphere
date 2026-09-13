@@ -122,6 +122,7 @@ model User {
   replies       DiscussionReply[]
   chatRoomsCreated ChatRoom[]
   chatMessages     ChatMessage[]
+  chatRoomUnlocks  ChatRoomUnlock[]
   jobDayLogs    JobDayLog[]
   calendarConnections CalendarConnection[]
   calendarIcsFeeds    CalendarIcsFeed[]
@@ -484,26 +485,45 @@ model DiscussionReply {
 
 /** Shared real-time channels (Discuss module). */
 model ChatRoom {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
-  description String?
-  createdById String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  description  String?
+  /** Optional channel password (bcrypt). Null = open to all authenticated users. */
+  passwordHash String?
+  createdById  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  createdBy User          @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdBy User             @relation(fields: [createdById], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
+  unlocks   ChatRoomUnlock[]
 
   @@index([createdAt])
 }
 
+/** Per-user unlock grant for password-protected channels. */
+model ChatRoomUnlock {
+  id         String   @id @default(cuid())
+  roomId     String
+  userId     String
+  unlockedAt DateTime @default(now())
+
+  room ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([userId])
+}
+
 model ChatMessage {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   roomId    String
   authorId  String
   body      String
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  editedAt  DateTime?
 
   room   ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
   author User     @relation(fields: [authorId], references: [id], onDelete: Cascade)

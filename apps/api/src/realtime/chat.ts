@@ -62,6 +62,7 @@ export type ChatNotifyPayload = {
   roomName: string;
   body: string;
   createdAt: Date | string;
+  editedAt?: Date | string | null;
   author: { id: string; name: string; avatarUrl?: string | null };
 };
 
@@ -70,16 +71,59 @@ export function broadcastChatMessage(message: ChatNotifyPayload) {
     ...message,
     createdAt:
       typeof message.createdAt === "string" ? message.createdAt : message.createdAt.toISOString(),
+    editedAt: message.editedAt
+      ? typeof message.editedAt === "string"
+        ? message.editedAt
+        : message.editedAt.toISOString()
+      : null,
   };
   io?.to(roomChannel(message.roomId)).emit("message:new", {
     id: payload.id,
     roomId: payload.roomId,
     body: payload.body,
     createdAt: payload.createdAt,
+    editedAt: payload.editedAt,
     author: payload.author,
   });
   // All authenticated sockets — powers in-app chat toasts even outside the room.
   io?.emit("chat:notify", payload);
+}
+
+export function broadcastMessageUpdated(message: {
+  id: string;
+  roomId: string;
+  body: string;
+  createdAt: Date | string;
+  editedAt?: Date | string | null;
+  author: { id: string; name: string; avatarUrl?: string | null };
+}) {
+  const payload = {
+    ...message,
+    createdAt:
+      typeof message.createdAt === "string" ? message.createdAt : message.createdAt.toISOString(),
+    editedAt: message.editedAt
+      ? typeof message.editedAt === "string"
+        ? message.editedAt
+        : message.editedAt.toISOString()
+      : null,
+  };
+  io?.to(roomChannel(message.roomId)).emit("message:updated", payload);
+}
+
+export function broadcastRoomUpdated(room: {
+  id: string;
+  name: string;
+  description: string | null;
+  hasPassword: boolean;
+  passwordChanged?: boolean;
+}) {
+  io?.emit("room:updated", {
+    id: room.id,
+    name: room.name,
+    description: room.description,
+    hasPassword: room.hasPassword,
+    passwordChanged: Boolean(room.passwordChanged),
+  });
 }
 
 export function broadcastRoomCleared(roomId: string) {
@@ -89,6 +133,18 @@ export function broadcastRoomCleared(roomId: string) {
 export function broadcastRoomDeleted(roomId: string) {
   io?.emit("room:deleted", { roomId });
   presenceByRoom.delete(roomId);
+}
+
+async function userCanAccessRoom(
+  user: AuthUser,
+  room: { id: string; createdById: string; passwordHash: string | null },
+) {
+  if (!room.passwordHash) return true;
+  if (user.role === "ADMIN" || room.createdById === user.id) return true;
+  const unlock = await prisma.chatRoomUnlock.findUnique({
+    where: { roomId_userId: { roomId: room.id, userId: user.id } },
+  });
+  return Boolean(unlock);
 }
 
 export function attachChatRealtime(httpServer: HttpServer) {
@@ -135,6 +191,10 @@ export function attachChatRealtime(httpServer: HttpServer) {
       const room = await prisma.chatRoom.findUnique({ where: { id: parsed.data.roomId } });
       if (!room) {
         ack?.({ ok: false, error: "NOT_FOUND" });
+        return;
+      }
+      if (!(await userCanAccessRoom(user, room))) {
+        ack?.({ ok: false, error: "LOCKED" });
         return;
       }
 
@@ -198,6 +258,10 @@ export function attachChatRealtime(httpServer: HttpServer) {
           ack?.({ ok: false, error: "NOT_FOUND" });
           return;
         }
+        if (!(await userCanAccessRoom(user, room))) {
+          ack?.({ ok: false, error: "LOCKED" });
+          return;
+        }
 
         // Auto-join if the client reconnects without re-emitting room:join.
         if (!data.rooms.has(room.id)) {
@@ -237,16 +301,21 @@ export function attachChatRealtime(httpServer: HttpServer) {
           roomName: room.name,
           body: message.body,
           createdAt: message.createdAt.toISOString(),
+          editedAt: message.editedAt ? message.editedAt.toISOString() : null,
           author: message.author,
         };
         broadcastChatMessage(dto);
-        ack?.({ ok: true, data: {
-          id: dto.id,
-          roomId: dto.roomId,
-          body: dto.body,
-          createdAt: dto.createdAt,
-          author: dto.author,
-        } });
+        ack?.({
+          ok: true,
+          data: {
+            id: dto.id,
+            roomId: dto.roomId,
+            body: dto.body,
+            createdAt: dto.createdAt,
+            editedAt: dto.editedAt,
+            author: dto.author,
+          },
+        });
       } catch (err) {
         console.error("message:send failed", err);
         ack?.({ ok: false, error: "INTERNAL" });
