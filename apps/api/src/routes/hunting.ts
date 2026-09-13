@@ -97,6 +97,12 @@ async function assertProfileOwned(profileId: string, userId: string, role: strin
   return { profile };
 }
 
+async function assertProfileExists(profileId: string) {
+  const profile = await prisma.huntingProfile.findUnique({ where: { id: profileId } });
+  if (!profile) return { error: "NOT_FOUND" as const };
+  return { profile };
+}
+
 async function assertBidOwned(bidId: string, userId: string, role: string, profileId?: string) {
   const bid = await prisma.huntingBid.findUnique({ where: { id: bidId } });
   if (!bid) return { error: "NOT_FOUND" as const };
@@ -125,14 +131,19 @@ function sheetConfigFor(profile: {
 /* ── Profiles ─────────────────────────────────────────────── */
 
 huntingRouter.get("/profiles", async (req, res) => {
-  const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
+  const scopeAll = req.query.scope === "all";
+  const where = scopeAll
+    ? {}
+    : ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
   const activeOnly = req.query.active === "true";
   const country =
     typeof req.query.country === "string" ? req.query.country.trim() : "";
   // Imported calendars get hunting profiles so they appear in Bid Tracking
-  if (where.userId) {
+  if (!scopeAll && "userId" in where && where.userId) {
     await ensureAllIcsFeedHuntingProfiles(where.userId);
-  } else if (req.user!.role !== "ADMIN") {
+  } else if (!scopeAll) {
+    await ensureAllIcsFeedHuntingProfiles(req.user!.id);
+  } else {
     await ensureAllIcsFeedHuntingProfiles(req.user!.id);
   }
   const data = await prisma.huntingProfile.findMany({
@@ -142,6 +153,7 @@ huntingRouter.get("/profiles", async (req, res) => {
       ...(country ? { country: { equals: country, mode: "insensitive" } } : {}),
     },
     include: {
+      user: { select: { id: true, name: true } },
       icsFeed: { select: { id: true, label: true, color: true, url: true } },
     },
     orderBy: [{ active: "desc" }, { country: "asc" }, { name: "asc" }],
@@ -319,17 +331,24 @@ huntingRouter.post("/profiles/:id/sheet/sync", async (req, res) => {
 
 async function upsertCapturedJobs(
   profile: { id: string; userId: string },
-  jobs: CaptureJobInput[]
+  jobs: CaptureJobInput[],
+  actorUserId?: string
 ) {
+  const postedByUserId = actorUserId || profile.userId;
   let created = 0;
   let updated = 0;
   let skipped = 0;
 
   for (const job of jobs) {
     const existing = await prisma.capturedJob.findFirst({
-      where: { profileId: profile.id, externalId: job.externalId },
+      where: { externalId: job.externalId },
     });
     if (existing) {
+      // Already on the shared New jobs feed (same or another domain) — skip cross-domain dupes.
+      if (existing.profileId !== profile.id) {
+        skipped += 1;
+        continue;
+      }
       if (existing.status === "BIDDED" || existing.status === "DISMISSED") {
         skipped += 1;
         continue;
@@ -350,7 +369,7 @@ async function upsertCapturedJobs(
     } else {
       await prisma.capturedJob.create({
         data: {
-          userId: profile.userId,
+          userId: postedByUserId,
           profileId: profile.id,
           externalId: job.externalId,
           title: job.title,
@@ -408,12 +427,9 @@ huntingRouter.post("/profiles/:id/capture/sync", async (req, res) => {
 });
 
 huntingRouter.post("/profiles/:id/capture/import-csv", async (req, res) => {
-  const check = await assertProfileOwned(req.params.id, req.user!.id, req.user!.role);
+  const check = await assertProfileExists(req.params.id);
   if ("error" in check && check.error === "NOT_FOUND") {
     return res.status(404).json({ error: { code: "NOT_FOUND", message: "Not found" } });
-  }
-  if ("error" in check && check.error === "FORBIDDEN") {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Not yours" } });
   }
   const csvText = typeof req.body?.csv === "string" ? req.body.csv : "";
   if (!csvText.trim()) {
@@ -427,7 +443,7 @@ huntingRouter.post("/profiles/:id/capture/import-csv", async (req, res) => {
 
   try {
     const jobs = parseCaptureCsv(csvText);
-    const meta = await upsertCapturedJobs(check.profile!, jobs);
+    const meta = await upsertCapturedJobs(check.profile!, jobs, req.user!.id);
     return res.json({ data: { meta } });
   } catch (err) {
     return res.status(400).json({
@@ -440,12 +456,9 @@ huntingRouter.post("/profiles/:id/capture/import-csv", async (req, res) => {
 });
 
 huntingRouter.get("/profiles/:id/capture/export-csv", async (req, res) => {
-  const check = await assertProfileOwned(req.params.id, req.user!.id, req.user!.role);
+  const check = await assertProfileExists(req.params.id);
   if ("error" in check && check.error === "NOT_FOUND") {
     return res.status(404).json({ error: { code: "NOT_FOUND", message: "Not found" } });
-  }
-  if ("error" in check && check.error === "FORBIDDEN") {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Not yours" } });
   }
 
   const jobs = await prisma.capturedJob.findMany({
@@ -459,10 +472,8 @@ huntingRouter.get("/profiles/:id/capture/export-csv", async (req, res) => {
   return res.send(csv);
 });
 
-huntingRouter.get("/fetch/export-csv", async (req, res) => {
-  const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
+huntingRouter.get("/fetch/export-csv", async (_req, res) => {
   const jobs = await prisma.capturedJob.findMany({
-    where,
     orderBy: { capturedAt: "desc" },
   });
   const csv = serializeCaptureCsv(jobs);
@@ -471,10 +482,9 @@ huntingRouter.get("/fetch/export-csv", async (req, res) => {
   return res.send(csv);
 });
 
-/* ── New jobs / Job fetch (CapturedJob) ───────────────────── */
+/* ── New jobs / Job fetch (CapturedJob) — shared across all users ── */
 
 huntingRouter.get("/fetch", async (req, res) => {
-  const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
   const profileId = typeof req.query.profileId === "string" ? req.query.profileId : undefined;
   const statusParsed = z.enum(capturedStatuses).safeParse(req.query.status);
   const openOnly = req.query.open === "true";
@@ -482,7 +492,6 @@ huntingRouter.get("/fetch", async (req, res) => {
   const { page, pageSize, skip, take } = parsePagination(req.query as Record<string, unknown>);
 
   const baseWhere: Prisma.CapturedJobWhereInput = {
-    ...where,
     ...(profileId ? { profileId } : {}),
   };
   const listWhere: Prisma.CapturedJobWhereInput = {
@@ -512,6 +521,10 @@ huntingRouter.get("/fetch", async (req, res) => {
       orderBy: { capturedAt: "desc" },
       skip,
       take,
+      include: {
+        user: { select: { id: true, name: true } },
+        profile: { select: { id: true, name: true, userId: true } },
+      },
     }),
     prisma.capturedJob.groupBy({
       by: ["status"],
@@ -540,19 +553,16 @@ huntingRouter.post("/fetch", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: { code: "VALIDATION", message: parsed.error.message } });
   }
-  const check = await assertProfileOwned(parsed.data.profileId, req.user!.id, req.user!.role);
+  const check = await assertProfileExists(parsed.data.profileId);
   if ("error" in check && check.error === "NOT_FOUND") {
     return res.status(404).json({ error: { code: "NOT_FOUND", message: "Profile not found" } });
-  }
-  if ("error" in check && check.error === "FORBIDDEN") {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Not yours" } });
   }
 
   const sourceUrl = parsed.data.sourceUrl || null;
   const externalId = sourceUrl ? normalizeJobLink(sourceUrl) : null;
   if (externalId) {
     const dup = await prisma.capturedJob.findFirst({
-      where: { profileId: parsed.data.profileId, externalId },
+      where: { externalId },
     });
     if (dup) {
       return res.status(409).json({ error: { code: "CONFLICT", message: "Job link already fetched" } });
@@ -572,6 +582,10 @@ huntingRouter.post("/fetch", async (req, res) => {
       platform: parsed.data.platform?.trim() ?? "manual",
       status: parsed.data.status ?? "NEW",
     },
+    include: {
+      user: { select: { id: true, name: true } },
+      profile: { select: { id: true, name: true, userId: true } },
+    },
   });
   return res.status(201).json({ data });
 });
@@ -580,9 +594,6 @@ huntingRouter.patch("/fetch/:id", async (req, res) => {
   const existing = await prisma.capturedJob.findUnique({ where: { id: req.params.id } });
   if (!existing) {
     return res.status(404).json({ error: { code: "NOT_FOUND", message: "Not found" } });
-  }
-  if (req.user!.role !== "ADMIN" && existing.userId !== req.user!.id) {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Not yours" } });
   }
   const parsed = captureBody.safeParse(req.body);
   if (!parsed.success) {
@@ -599,6 +610,10 @@ huntingRouter.patch("/fetch/:id", async (req, res) => {
       platform: parsed.data.platform === undefined ? undefined : parsed.data.platform.trim(),
       status: parsed.data.status,
     },
+    include: {
+      user: { select: { id: true, name: true } },
+      profile: { select: { id: true, name: true, userId: true } },
+    },
   });
   return res.json({ data });
 });
@@ -607,9 +622,6 @@ huntingRouter.delete("/fetch/:id", async (req, res) => {
   const existing = await prisma.capturedJob.findUnique({ where: { id: req.params.id } });
   if (!existing) {
     return res.status(404).json({ error: { code: "NOT_FOUND", message: "Not found" } });
-  }
-  if (req.user!.role !== "ADMIN" && existing.userId !== req.user!.id) {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Not yours" } });
   }
   await prisma.capturedJob.delete({ where: { id: existing.id } });
   return res.status(204).send();
@@ -620,21 +632,20 @@ huntingRouter.post("/fetch/:id/promote", async (req, res) => {
   if (!existing) {
     return res.status(404).json({ error: { code: "NOT_FOUND", message: "Not found" } });
   }
-  if (req.user!.role !== "ADMIN" && existing.userId !== req.user!.id) {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Not yours" } });
-  }
 
   const pushToSheet = Boolean(req.body?.pushToSheet);
   const sheetKey = existing.externalId || (existing.sourceUrl ? normalizeJobLink(existing.sourceUrl) : null);
 
   let bid = sheetKey
-    ? await prisma.huntingBid.findFirst({ where: { profileId: existing.profileId, sheetKey } })
+    ? await prisma.huntingBid.findFirst({
+        where: { userId: req.user!.id, profileId: existing.profileId, sheetKey },
+      })
     : null;
 
   if (!bid) {
     bid = await prisma.huntingBid.create({
       data: {
-        userId: existing.userId,
+        userId: req.user!.id,
         profileId: existing.profileId,
         company: existing.company || "Unknown",
         roleTitle: existing.title,

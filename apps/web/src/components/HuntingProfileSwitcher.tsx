@@ -13,6 +13,7 @@ export type HuntingProfileIcsFeed = {
 
 export type HuntingProfile = {
   id: string;
+  userId?: string;
   name: string;
   label: string;
   country: string;
@@ -23,6 +24,7 @@ export type HuntingProfile = {
   sheetSyncedAt?: string | null;
   captureBotUrl?: string;
   captureSyncedAt?: string | null;
+  user?: { id: string; name: string } | null;
   /** Linked imported calendar (if any) — same profile across bids / schedules / calendar */
   icsFeed?: HuntingProfileIcsFeed | null;
 };

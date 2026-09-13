@@ -50,6 +50,7 @@ Every query that returns user-owned rows must filter by `userId` unless the acto
 - **CalendarShare**: request → accept → view another WorkSphere user’s events (read-only)
 - **CalendarIcsFeed**: paste published Outlook/ICS URLs (many per user)
 - Money amounts stored as integer minor units (cents) + `currency` code
+- **Job capture / New jobs** — captured openings are **shared workspace-wide** (all users see the same feed); domains listed via `GET /hunting/profiles?scope=all`; bid tracking and personal calendars stay per-user unless noted otherwise
 - Soft-delete only when history matters (bids, transactions); otherwise hard delete OK for drafts
 - Do not scrape or automate third-party job platforms in-repo; integrate via user-provided capture payloads and the user's own bid-bot API contract
 

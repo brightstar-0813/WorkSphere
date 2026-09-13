@@ -24,6 +24,8 @@ type CapturedJob = {
   platform: string;
   status: string;
   capturedAt: string;
+  user?: { id: string; name: string } | null;
+  profile?: { id: string; name: string; userId: string } | null;
 };
 
 function findProfileByDomain(profiles: HuntingProfile[], domain: string) {
@@ -69,10 +71,15 @@ export function HuntingFetchPage() {
   const selectedDomainLabel =
     (profileId && domainById[profileId]) || domain.trim() || null;
   const matchedProfile = findProfileByDomain(profiles, domain);
-  const canEditOrDelete = Boolean(profileId && matchedProfile?.id === profileId);
+  const canManageDomain = Boolean(
+    profileId &&
+      matchedProfile?.id === profileId &&
+      user &&
+      (user.role === "ADMIN" || matchedProfile.userId === user.id || !matchedProfile.userId),
+  );
 
   const loadProfiles = useCallback(async () => {
-    const data = await api<HuntingProfile[]>("/hunting/profiles");
+    const data = await api<HuntingProfile[]>("/hunting/profiles?scope=all");
     setProfiles(data);
     return data;
   }, []);
@@ -314,6 +321,7 @@ export function HuntingFetchPage() {
       <div className="page-header hunting-page-header">
         <div>
           <h1>{t("hunting.fetch.heading")}</h1>
+          <p className="muted">{t("hunting.fetch.sharedHint")}</p>
         </div>
       </div>
 
@@ -371,7 +379,7 @@ export function HuntingFetchPage() {
                 <button
                   type="button"
                   className="btn"
-                  disabled={saving || !canEditOrDelete || !domain.trim()}
+                  disabled={saving || !canManageDomain || !domain.trim()}
                   onClick={() => void editDomain()}
                 >
                   {t("common.edit")}
@@ -379,7 +387,7 @@ export function HuntingFetchPage() {
                 <button
                   type="button"
                   className="btn ghost"
-                  disabled={saving || !canEditOrDelete}
+                  disabled={saving || !canManageDomain}
                   onClick={() => setConfirmDeleteDomain(true)}
                 >
                   {t("common.delete")}
@@ -518,7 +526,10 @@ export function HuntingFetchPage() {
                       {job.description ? truncate(job.description) : "—"}
                     </td>
                     <td className="tabular muted">
-                      {new Date(job.capturedAt).toLocaleDateString(i18n.language)}
+                      <div>{new Date(job.capturedAt).toLocaleDateString(i18n.language)}</div>
+                      {job.user?.name ? (
+                        <div className="small">{t("hunting.fetch.postedBy", { name: job.user.name })}</div>
+                      ) : null}
                     </td>
                     <td className="hunting-fetch-actions">
                       <button

@@ -94,6 +94,7 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
     <div className="panel hunting-capture-io">
       <header className="hunting-panel-head">
         <h2>{t("hunting.capture.heading")}</h2>
+        <p className="muted small">{t("hunting.capture.sharedHint")}</p>
       </header>
       <div className="toolbar">
         <button
