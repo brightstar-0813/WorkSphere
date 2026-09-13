@@ -1,9 +1,11 @@
 import { FormEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth";
+import { AlertBanner } from "../components/AlertBanner";
+import { PasswordField } from "../components/PasswordField";
 import { TimezonePicker } from "../components/TimezonePicker";
 import { mediaUrl } from "../config";
-import { detectTimeZone } from "../lib/timezone";
+import { resolveAppTimeZone } from "../lib/timezone";
 
 function initialsOf(name: string) {
   return name
@@ -16,11 +18,15 @@ function initialsOf(name: string) {
 
 export function ProfilePage() {
   const { t } = useTranslation();
-  const { user, updateProfile, uploadAvatar, removeAvatar, setTimeZone } = useAuth();
+  const { user, updateProfile, uploadAvatar, removeAvatar, setTimeZone, changePassword } =
+    useAuth();
   const [name, setName] = useState(user?.name ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!user) return null;
@@ -35,6 +41,32 @@ export function ProfilePage() {
     try {
       await updateProfile({ name: next });
       setOk(t("profile.saved"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common.error"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onChangePassword(e: FormEvent) {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setError(t("auth.passwordMismatch"));
+      return;
+    }
+    if (newPassword.length < 6) {
+      setError(t("auth.passwordTooShort"));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setOk("");
+    try {
+      await changePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setOk(t("profile.passwordChanged"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common.error"));
     } finally {
@@ -127,7 +159,6 @@ export function ProfilePage() {
               </button>
             )}
           </div>
-          <p className="muted small">{t("profile.avatarHint")}</p>
         </article>
 
         <article className="panel">
@@ -148,19 +179,57 @@ export function ProfilePage() {
             <div className="field">
               <span>{t("profile.timezone")}</span>
               <TimezonePicker
-                value={user.timeZone?.trim() || detectTimeZone()}
+                value={resolveAppTimeZone(user.timeZone)}
                 onChange={(tz) => void setTimeZone(tz)}
               />
-              <p className="muted small">{t("calendar.timezone.hint")}</p>
             </div>
             <button className="btn primary" disabled={busy || !name.trim() || name.trim() === user.name}>
               {busy ? t("common.saving") : t("common.save")}
             </button>
           </form>
         </article>
+
+        <article className="panel">
+          <h2>{t("profile.password")}</h2>
+          <form className="stack" onSubmit={(e) => void onChangePassword(e)}>
+            <PasswordField
+              label={t("auth.currentPassword")}
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+            <PasswordField
+              label={t("auth.newPassword")}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              autoComplete="new-password"
+              minLength={6}
+              required
+            />
+            <PasswordField
+              label={t("auth.confirmPassword")}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              autoComplete="new-password"
+              minLength={6}
+              required
+            />
+            <button
+              className="btn primary"
+              disabled={busy || !currentPassword || !newPassword || !confirmPassword}
+            >
+              {busy ? t("common.saving") : t("profile.changePassword")}
+            </button>
+          </form>
+        </article>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <AlertBanner tone="danger" onDismiss={() => setError("")}>
+          {error}
+        </AlertBanner>
+      )}
       {ok && <p className="ok-msg">{ok}</p>}
     </section>
   );

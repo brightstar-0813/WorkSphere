@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { ownerFilter, requireAuth } from "../auth.js";
 import { deleteLinkedCalendarEvents, syncDeadlineEvent } from "../calendarSync.js";
+import { listMeta, parsePagination } from "../pagination.js";
 import { attachScheduleRoutes } from "./schedules.js";
 import { attachJobDailyRoutes } from "./jobDaily.js";
 
@@ -19,8 +20,14 @@ const jobBody = z.object({
 
 jobsRouter.get("/", async (req, res) => {
   const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
-  const data = await prisma.job.findMany({ where, orderBy: { updatedAt: "desc" } });
-  return res.json({ data });
+  const { page, pageSize, skip, take } = parsePagination(req.query as Record<string, unknown>, {
+    defaultPageSize: 100,
+  });
+  const [total, data] = await Promise.all([
+    prisma.job.count({ where }),
+    prisma.job.findMany({ where, orderBy: { updatedAt: "desc" }, skip, take }),
+  ]);
+  return res.json({ data, meta: listMeta(total, page, pageSize) });
 });
 
 jobsRouter.post("/", async (req, res) => {

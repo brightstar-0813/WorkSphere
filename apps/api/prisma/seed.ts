@@ -32,6 +32,7 @@ async function main() {
       name: DEFAULT_ADMIN.name,
       role: Role.ADMIN,
       locale: "en",
+      timeZone: "Asia/Tokyo",
     },
   });
 
@@ -44,6 +45,7 @@ async function main() {
       name: "Demo User",
       role: Role.USER,
       locale: "en",
+      timeZone: "Asia/Tokyo",
     },
   });
 
@@ -64,6 +66,7 @@ async function main() {
         userId: user.id,
         name: "Default",
         label: "Demo",
+        country: "United States",
       },
     });
 
@@ -132,6 +135,25 @@ async function main() {
         body: "Confirm job handle, hunting calendar, money, discuss & report for v1.",
         linkedType: "JOB",
         linkedId: job.id,
+      },
+    });
+  }
+
+  const general = await prisma.chatRoom.findUnique({ where: { slug: "general" } });
+  if (!general) {
+    const room = await prisma.chatRoom.create({
+      data: {
+        name: "General",
+        slug: "general",
+        description: "Shared channel for the whole team — updates, questions, and wins.",
+        createdById: admin.id,
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        roomId: room.id,
+        authorId: admin.id,
+        body: "Welcome to Discuss. Select a channel on the left to start collaborating in real time.",
       },
     });
   }

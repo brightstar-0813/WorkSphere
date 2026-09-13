@@ -399,7 +399,6 @@ export function SchedulePanel({
 
             {recur === "CUSTOM" && (
               <div className="recur-days" role="group" aria-label={t("schedule.days")}>
-                <p className="recur-days-hint muted small">{t("schedule.daysHint")}</p>
                 <div className="recur-days-row">
                   {WEEKDAY_ORDER.map((day) => {
                     const pressed = recurDays.includes(day);

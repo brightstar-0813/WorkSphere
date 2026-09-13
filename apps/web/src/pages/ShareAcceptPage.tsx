@@ -113,17 +113,11 @@ export function ShareAcceptPage() {
         {!info && !error ? <p className="muted">{t("common.loading")}</p> : null}
 
         {info && doneAccepted && (
-          <>
-            <p className="share-accept-ok">{t("calendar.shareInvite.acceptedTitle")}</p>
-            <p className="muted">{t("calendar.shareInvite.acceptedBody")}</p>
-          </>
+          <p className="share-accept-ok">{t("calendar.shareInvite.acceptedTitle")}</p>
         )}
 
         {info && doneDeclined && !doneAccepted && (
-          <>
-            <p>{t("calendar.shareInvite.declinedTitle")}</p>
-            <p className="muted">{t("calendar.shareInvite.declinedBody")}</p>
-          </>
+          <p>{t("calendar.shareInvite.declinedTitle")}</p>
         )}
 
         {info && info.status === "PENDING" && !doneAccepted && (
@@ -157,7 +151,6 @@ export function ShareAcceptPage() {
 
             {showIcsFallback ? (
               <form className="share-accept-ics" onSubmit={(e) => void acceptWithIcs(e)}>
-                <p className="muted small">{t("calendar.shareInvite.icsHint", { email: info.ownerEmail })}</p>
                 <input
                   type="url"
                   value={icsUrl}

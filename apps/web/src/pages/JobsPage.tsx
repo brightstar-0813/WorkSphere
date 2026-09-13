@@ -129,6 +129,12 @@ export function JobsPage() {
         tone: "success",
         sourceType: "JOB",
       });
+    } catch (err) {
+      notify({
+        title: t("common.error"),
+        body: err instanceof Error ? err.message : undefined,
+        tone: "danger",
+      });
     } finally {
       setSaving(false);
     }
@@ -157,6 +163,12 @@ export function JobsPage() {
         tone: "info",
         sourceType: "JOB",
       });
+    } catch (err) {
+      notify({
+        title: t("common.error"),
+        body: err instanceof Error ? err.message : undefined,
+        tone: "danger",
+      });
     } finally {
       setSaving(false);
     }
@@ -176,6 +188,12 @@ export function JobsPage() {
         body: t("jobs.toastDeletedBody", { name }),
         tone: "warning",
         sourceType: "JOB",
+      });
+    } catch (err) {
+      notify({
+        title: t("common.error"),
+        body: err instanceof Error ? err.message : undefined,
+        tone: "danger",
       });
     } finally {
       setDeleting(false);
