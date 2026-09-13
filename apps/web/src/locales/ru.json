@@ -216,8 +216,18 @@
       "sharedHint": "Загруженные вакансии видны всем в рабочей области.",
       "upload": "Загрузить CSV",
       "download": "Скачать CSV",
+      "delete": "Удалить",
+      "deleteTitle": "Удалить файл вакансий?",
+      "confirmDelete": "Удалить все {{count}} общих вакансий из рабочей области? Это нельзя отменить.",
+      "deleteDone": "Удалено вакансий: {{count}}",
       "downloadDone": "CSV скачан",
-      "importResult": "В CSV {{total}} вакансий → {{created}} новых, {{updated}} обновлено"
+      "importResult": "В CSV {{total}} вакансий → {{created}} новых, {{updated}} обновлено",
+      "statusEmpty": "Вакансии ещё не загружены.",
+      "statusReady": "Загружено",
+      "statusJobs": "{{count}} вакансий",
+      "statusUploadedAt": "Загружено {{when}}",
+      "statusUpdatedAt": "Обновлено {{when}}",
+      "statusBy": "от {{name}}"
     },
     "fetch": {
       "heading": "Новые вакансии",

@@ -216,8 +216,18 @@
       "sharedHint": "上传的职位会对工作区内所有人可见。",
       "upload": "上传 CSV",
       "download": "下载 CSV",
+      "delete": "删除",
+      "deleteTitle": "删除职位文件？",
+      "confirmDelete": "将移除工作区中全部 {{count}} 个共享职位，此操作无法撤销。",
+      "deleteDone": "已删除 {{count}} 个职位",
       "downloadDone": "CSV 已下载",
-      "importResult": "CSV 含 {{total}} 个职位 → 新增 {{created}}，更新 {{updated}}"
+      "importResult": "CSV 含 {{total}} 个职位 → 新增 {{created}}，更新 {{updated}}",
+      "statusEmpty": "尚未上传职位。",
+      "statusReady": "已上传",
+      "statusJobs": "{{count}} 个职位",
+      "statusUploadedAt": "上传于 {{when}}",
+      "statusUpdatedAt": "更新于 {{when}}",
+      "statusBy": "由 {{name}}"
     },
     "fetch": {
       "heading": "新职位",

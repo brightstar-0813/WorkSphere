@@ -240,8 +240,18 @@
       "sharedHint": "Uploaded jobs are shared with everyone on this workspace.",
       "upload": "Upload CSV",
       "download": "Download CSV",
+      "delete": "Delete",
+      "deleteTitle": "Delete job file?",
+      "confirmDelete": "Remove all {{count}} shared jobs from this workspace? This cannot be undone.",
+      "deleteDone": "Deleted {{count}} jobs",
       "downloadDone": "CSV downloaded",
-      "importResult": "CSV had {{total}} jobs → {{created}} new, {{updated}} updated"
+      "importResult": "CSV had {{total}} jobs → {{created}} new, {{updated}} updated",
+      "statusEmpty": "No jobs uploaded yet.",
+      "statusReady": "Uploaded",
+      "statusJobs": "{{count}} jobs",
+      "statusUploadedAt": "Uploaded {{when}}",
+      "statusUpdatedAt": "Updated {{when}}",
+      "statusBy": "by {{name}}"
     },
     "fetch": {
       "heading": "New jobs",

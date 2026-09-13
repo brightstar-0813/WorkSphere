@@ -5662,6 +5662,23 @@ a.linkish:hover {
   align-items: center;
 }
 
+.hunting-capture-status {
+  margin-top: 0.65rem;
+}
+
+.hunting-capture-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  align-items: center;
+  margin: 0;
+}
+
+.hunting-capture-file {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  color: var(--text, #e8eef7);
+}
+
 .hunting-manual-post {
   margin-bottom: 1rem;
 }

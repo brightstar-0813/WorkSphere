@@ -116,6 +116,7 @@ model User {
   interviewProgress InterviewProgress[]
   interviewProgressOptions InterviewProgressOption[]
   capturedJobs    CapturedJob[]
+  jobFileUploads  JobFileMeta[]
   events        CalendarEvent[]
   transactions  Transaction[]
   discussions   Discussion[]
@@ -128,6 +129,18 @@ model User {
   calendarIcsFeeds    CalendarIcsFeed[]
   shareRequestsSent     CalendarShare[] @relation("ShareRequester")
   shareRequestsReceived CalendarShare[] @relation("ShareOwner")
+}
+
+/** Singleton workspace metadata for the shared Job file CSV upload. */
+model JobFileMeta {
+  id           String    @id @default("workspace")
+  fileName     String    @default("")
+  uploadedAt   DateTime?
+  uploadedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  uploadedBy User? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
 }
 
 model Job {

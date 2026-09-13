@@ -1,7 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, getToken } from "../api";
+import { useAuth } from "../auth";
 import { apiUrl } from "../config";
+import { resolveAppTimeZone } from "../lib/timezone";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type Props = {
   profileId: string | null;
@@ -15,14 +18,52 @@ type SyncMeta = {
   total: number;
 };
 
+type FileStatus = {
+  jobCount: number;
+  fileName: string | null;
+  uploadedAt: string | null;
+  uploadedBy: { id: string; name: string } | null;
+  lastUpdatedAt: string | null;
+};
+
 export function HuntingCapturePanel({ profileId, onSynced }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const { user } = useAuth();
+  const timeZone = resolveAppTimeZone(user?.timeZone);
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [status, setStatus] = useState<FileStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  async function loadStatus() {
+    setStatusLoading(true);
+    try {
+      const data = await api<FileStatus>("/hunting/fetch/file-status");
+      setStatus(data);
+    } catch {
+      setStatus(null);
+    } finally {
+      setStatusLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadStatus();
+  }, []);
 
   if (!profileId) return null;
+
+  function formatWhen(iso: string | null) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleString(i18n.language, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone,
+    });
+  }
 
   async function onUploadFile(file: File) {
     setBusy(true);
@@ -32,7 +73,7 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
       const csv = await file.text();
       const result = await api<{ meta: SyncMeta }>(`/hunting/profiles/${profileId}/capture/import-csv`, {
         method: "POST",
-        body: JSON.stringify({ csv }),
+        body: JSON.stringify({ csv, fileName: file.name }),
       });
       setMessage(
         t("hunting.capture.importResult", {
@@ -41,6 +82,7 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
           updated: result.meta.updated,
         }),
       );
+      await loadStatus();
       onSynced?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common.error"));
@@ -75,7 +117,7 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
       const blob = await res.blob();
       const disposition = res.headers.get("Content-Disposition") || "";
       const match = /filename="([^"]+)"/.exec(disposition);
-      const filename = match?.[1] || "jobs.csv";
+      const filename = match?.[1] || status?.fileName || "jobs.csv";
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -89,6 +131,26 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
       setBusy(false);
     }
   }
+
+  async function onDeleteAll() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await api<{ deleted: number }>("/hunting/fetch", { method: "DELETE" });
+      setConfirmDelete(false);
+      setMessage(t("hunting.capture.deleteDone", { count: result.deleted }));
+      await loadStatus();
+      onSynced?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common.error"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasJobs = (status?.jobCount ?? 0) > 0;
+  const whenLabel = formatWhen(status?.uploadedAt ?? status?.lastUpdatedAt ?? null);
 
   return (
     <div className="panel hunting-capture-io">
@@ -105,8 +167,21 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
         >
           {t("hunting.capture.upload")}
         </button>
-        <button className="btn" type="button" disabled={busy} onClick={() => void onDownload()}>
+        <button
+          className="btn"
+          type="button"
+          disabled={busy || !hasJobs}
+          onClick={() => void onDownload()}
+        >
           {t("hunting.capture.download")}
+        </button>
+        <button
+          className="btn ghost"
+          type="button"
+          disabled={busy || !hasJobs}
+          onClick={() => setConfirmDelete(true)}
+        >
+          {t("hunting.capture.delete")}
         </button>
         <input
           ref={fileRef}
@@ -119,8 +194,50 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
           }}
         />
       </div>
+      <div className="hunting-capture-status" aria-live="polite">
+        {statusLoading ? (
+          <p className="muted small">{t("common.loading")}</p>
+        ) : hasJobs ? (
+          <p className="muted small hunting-capture-status-line">
+            <span className="hunting-sheet-chip tone-success">
+              {t("hunting.capture.statusReady")}
+            </span>
+            {status?.fileName ? (
+              <span className="hunting-capture-file" translate="no">
+                {status.fileName}
+              </span>
+            ) : null}
+            <span>
+              {t("hunting.capture.statusJobs", { count: status?.jobCount ?? 0 })}
+            </span>
+            {whenLabel ? (
+              <span>
+                {status?.uploadedAt
+                  ? t("hunting.capture.statusUploadedAt", { when: whenLabel })
+                  : t("hunting.capture.statusUpdatedAt", { when: whenLabel })}
+              </span>
+            ) : null}
+            {status?.uploadedBy?.name ? (
+              <span>
+                {t("hunting.capture.statusBy", { name: status.uploadedBy.name })}
+              </span>
+            ) : null}
+          </p>
+        ) : (
+          <p className="muted small">{t("hunting.capture.statusEmpty")}</p>
+        )}
+      </div>
       {message && <p className="muted small">{message}</p>}
       {error && <p className="form-error">{error}</p>}
+      <ConfirmDialog
+        open={confirmDelete}
+        title={t("hunting.capture.deleteTitle")}
+        body={t("hunting.capture.confirmDelete", { count: status?.jobCount ?? 0 })}
+        danger
+        busy={busy}
+        onConfirm={() => void onDeleteAll()}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

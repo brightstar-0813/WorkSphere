@@ -440,11 +440,28 @@ huntingRouter.post("/profiles/:id/capture/import-csv", async (req, res) => {
       },
     });
   }
+  const rawName = typeof req.body?.fileName === "string" ? req.body.fileName.trim() : "";
+  const fileName = rawName.replace(/[^\w.\- ()[\]]+/g, "_").slice(0, 200) || "jobs.csv";
 
   try {
     const jobs = parseCaptureCsv(csvText);
     const meta = await upsertCapturedJobs(check.profile!, jobs, req.user!.id);
-    return res.json({ data: { meta } });
+    const uploadedAt = new Date();
+    await prisma.jobFileMeta.upsert({
+      where: { id: "workspace" },
+      create: {
+        id: "workspace",
+        fileName,
+        uploadedAt,
+        uploadedById: req.user!.id,
+      },
+      update: {
+        fileName,
+        uploadedAt,
+        uploadedById: req.user!.id,
+      },
+    });
+    return res.json({ data: { meta, file: { fileName, uploadedAt } } });
   } catch (err) {
     return res.status(400).json({
       error: {
@@ -480,6 +497,40 @@ huntingRouter.get("/fetch/export-csv", async (_req, res) => {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="jobs.csv"');
   return res.send(csv);
+});
+
+huntingRouter.get("/fetch/file-status", async (_req, res) => {
+  const [jobCount, latest, fileMeta] = await Promise.all([
+    prisma.capturedJob.count(),
+    prisma.capturedJob.findFirst({
+      orderBy: [{ updatedAt: "desc" }],
+      select: { updatedAt: true, capturedAt: true },
+    }),
+    prisma.jobFileMeta.findUnique({
+      where: { id: "workspace" },
+      include: { uploadedBy: { select: { id: true, name: true } } },
+    }),
+  ]);
+
+  return res.json({
+    data: {
+      jobCount,
+      fileName: fileMeta?.fileName || null,
+      uploadedAt: fileMeta?.uploadedAt?.toISOString() ?? null,
+      uploadedBy: fileMeta?.uploadedBy ?? null,
+      lastUpdatedAt:
+        latest?.updatedAt?.toISOString() ?? latest?.capturedAt?.toISOString() ?? null,
+    },
+  });
+});
+
+huntingRouter.delete("/fetch", async (_req, res) => {
+  const result = await prisma.$transaction(async (tx) => {
+    const deleted = await tx.capturedJob.deleteMany({});
+    await tx.jobFileMeta.deleteMany({ where: { id: "workspace" } });
+    return deleted;
+  });
+  return res.json({ data: { deleted: result.count } });
 });
 
 /* ── New jobs / Job fetch (CapturedJob) — shared across all users ── */
