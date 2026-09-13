@@ -19,6 +19,7 @@ import { interviewProgressRouter } from "./interviewProgress.js";
 import {
   appendJobToSpreadsheet,
   fetchSheetJobRows,
+  isMeaningfulSheetJobRow,
   mapSheetStatusToBidStatus,
   markJobAppliedOnSpreadsheet,
   normalizeJobLink,
@@ -257,12 +258,37 @@ huntingRouter.post("/profiles/:id/sheet/sync", async (req, res) => {
 
     let bidsCreated = 0;
     let bidsUpdated = 0;
+    let rowsSkipped = 0;
+
+    // Drop placeholder bids created from prior syncs of blank Ready rows.
+    const removedPlaceholders = await prisma.huntingBid.deleteMany({
+      where: {
+        profileId: profile.id,
+        source: "SHEET",
+        sourceUrl: null,
+        roleTitle: "Untitled role",
+        company: "Unknown",
+        OR: [{ sheetKey: { startsWith: "row:" } }, { sheetKey: null }],
+      },
+    });
 
     for (const row of rows) {
+      if (!isMeaningfulSheetJobRow(row)) {
+        rowsSkipped += 1;
+        continue;
+      }
+
       const sheetKey = normalizeJobLink(row.link) || `row:${row.row ?? row.title}:${row.company}`;
       const roleTitle = row.title || "Untitled role";
       const company = row.company || "Unknown";
       const sourceUrl = row.link || null;
+
+      // Never create Untitled/Unknown rows without a real link.
+      if (!sourceUrl && roleTitle === "Untitled role" && company === "Unknown") {
+        rowsSkipped += 1;
+        continue;
+      }
+
       const bidStatus = sheetStatusLooksReady(row.status)
         ? ("DRAFT" as const)
         : mapSheetStatusToBidStatus(row.status);
@@ -319,7 +345,13 @@ huntingRouter.post("/profiles/:id/sheet/sync", async (req, res) => {
     return res.json({
       data: {
         profile: updatedProfile,
-        meta: { bidsCreated, bidsUpdated, rowCount: rows.length },
+        meta: {
+          bidsCreated,
+          bidsUpdated,
+          rowCount: rows.length,
+          rowsSkipped,
+          placeholdersRemoved: removedPlaceholders.count,
+        },
       },
     });
   } catch (err) {

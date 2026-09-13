@@ -66,6 +66,33 @@ export function sheetStatusLooksReady(status: string): boolean {
   return !s || /^ready\b/.test(s) || /^saved\b/.test(s) || /^new\b/.test(s);
 }
 
+/**
+ * Real job rows need a title, company, or link.
+ * Status-only placeholders (blank rows pre-filled with "Ready") must not sync.
+ */
+export function isMeaningfulSheetJobRow(
+  row: Pick<SheetJobRow, "title" | "company" | "link" | "salary" | "status">,
+): boolean {
+  const title = String(row.title || "").trim();
+  const company = String(row.company || "").trim();
+  const link = String(row.link || "").trim();
+  const salary = String(row.salary || "").trim();
+
+  if (normalizeJobLink(link)) return true;
+
+  // Status / salary alone (empty job identity) — ignore Ready placeholders.
+  if (!title && !company) return false;
+
+  // Mis-mapped status text in the title column is not a job.
+  if (!company && /^(ready|saved|new|applied)$/i.test(title)) return false;
+
+  // Require at least one non-placeholder identity field.
+  if (title && !/^(untitled role|untitled)$/i.test(title)) return true;
+  if (company && !/^unknown$/i.test(company)) return true;
+  if (salary && (title || company)) return true;
+  return false;
+}
+
 export function sheetStatusLooksApplied(status: string): boolean {
   return /^\s*applied\b/i.test(String(status || "").trim());
 }
@@ -194,7 +221,7 @@ export async function fetchSheetJobRows(config: SheetConfig): Promise<SheetJobRo
           status: String(row.status || "").trim(),
         };
       })
-      .filter((r) => r.link);
+      .filter((r) => isMeaningfulSheetJobRow(r));
   }
 
   return (parsed.rows as SheetJobRow[])
@@ -208,7 +235,7 @@ export async function fetchSheetJobRows(config: SheetConfig): Promise<SheetJobRo
       salary: String(row.salary || "").trim(),
       status: String(row.status || "").trim(),
     }))
-    .filter((r) => r.link || r.title || r.company);
+    .filter((r) => isMeaningfulSheetJobRow(r));
 }
 
 export async function appendJobToSpreadsheet(
