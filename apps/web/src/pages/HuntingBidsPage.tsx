@@ -1,10 +1,14 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, apiList } from "../api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { HuntingProfileSwitcher } from "../components/HuntingProfileSwitcher";
+import {
+  HuntingProfileSwitcher,
+  isAllProfilesId,
+} from "../components/HuntingProfileSwitcher";
 import { HuntingSheetPanel } from "../components/HuntingSheetPanel";
 import { Pagination } from "../components/Pagination";
+import { PeriodToolbar, toDateKey, type PeriodType } from "../components/PeriodToolbar";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
 
 const BID_STATUSES = ["DRAFT", "SENT", "SHORTLISTED", "REJECTED", "WITHDRAWN", "WON"] as const;
@@ -44,17 +48,12 @@ export function HuntingBidsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [period, setPeriod] = useState<PeriodType>("weekly");
+  const [anchorKey, setAnchorKey] = useState(() => toDateKey(new Date()));
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-
-  const [company, setCompany] = useState("");
-  const [roleTitle, setRoleTitle] = useState("");
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [notes, setNotes] = useState("");
-  const [amount, setAmount] = useState("");
 
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -63,7 +62,10 @@ export function HuntingBidsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [profileId, statusFilter, debouncedQuery]);
+  }, [profileId, statusFilter, debouncedQuery, period, anchorKey]);
+
+  const allProfiles = isAllProfilesId(profileId);
+  const canMutate = Boolean(profileId && !allProfiles);
 
   const load = useCallback(async () => {
     if (!profileId) {
@@ -76,10 +78,14 @@ export function HuntingBidsPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams({
-        profileId,
         page: String(page),
         pageSize: String(PAGE_SIZE),
+        period,
       });
+      if (!isAllProfilesId(profileId)) {
+        params.set("profileId", profileId);
+      }
+      params.set("date", anchorKey);
       if (statusFilter !== "ALL") params.set("status", statusFilter);
       if (debouncedQuery) params.set("q", debouncedQuery);
       const { data, meta } = await apiList<Bid[]>(`/hunting/bids?${params}`);
@@ -91,7 +97,7 @@ export function HuntingBidsPage() {
     } finally {
       setLoading(false);
     }
-  }, [profileId, page, statusFilter, debouncedQuery, reloadToken]);
+  }, [profileId, page, statusFilter, debouncedQuery, period, anchorKey, reloadToken]);
 
   useEffect(() => {
     void load();
@@ -101,39 +107,6 @@ export function HuntingBidsPage() {
     () => BID_STATUSES.reduce((sum, s) => sum + (countsByStatus[s] ?? 0), 0),
     [countsByStatus],
   );
-
-  async function onAdd(e: FormEvent) {
-    e.preventDefault();
-    if (!profileId) return;
-    const amountMinor =
-      amount.trim() === "" ? null : Math.round(Number.parseFloat(amount) * 100);
-    setSaving(true);
-    try {
-      await api("/hunting/bids", {
-        method: "POST",
-        body: JSON.stringify({
-          profileId,
-          company,
-          roleTitle,
-          status: "DRAFT",
-          sourceUrl: sourceUrl || null,
-          notes,
-          amountMinor: Number.isFinite(amountMinor) ? amountMinor : null,
-        }),
-      });
-      setCompany("");
-      setRoleTitle("");
-      setSourceUrl("");
-      setNotes("");
-      setAmount("");
-      setCreating(false);
-      setStatusFilter("ALL");
-      setPage(1);
-      setReloadToken((n) => n + 1);
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function updateStatus(id: string, status: string) {
     await api(`/hunting/bids/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
@@ -157,30 +130,31 @@ export function HuntingBidsPage() {
       <div className="page-header hunting-page-header">
         <div>
           <h1>{t("hunting.bids.heading")}</h1>
-          <p className="muted">{t("hunting.bids.subtitle")}</p>
         </div>
-        {profileId && (
-          <div className="itsm-header-actions">
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => setCreating((v) => !v)}
-            >
-              {creating ? t("common.cancel") : t("hunting.bids.new")}
-            </button>
-          </div>
-        )}
       </div>
 
       <HuntingProfileSwitcher profileId={profileId} onProfileIdChange={setProfileId} />
-      <HuntingSheetPanel profileId={profileId} onSynced={() => setReloadToken((n) => n + 1)} />
+      {canMutate && profileId && (
+        <HuntingSheetPanel
+          profileId={profileId}
+          onSynced={() => setReloadToken((n) => n + 1)}
+        />
+      )}
 
       {!profileId ? (
         <div className="empty-state hunting-empty">
-          <p>{t("hunting.profile.needProfile")}</p>
+          <p>{t("hunting.profile.needProfileOrImport")}</p>
         </div>
       ) : (
         <>
+          <PeriodToolbar
+            period={period}
+            anchorKey={anchorKey}
+            onPeriodChange={setPeriod}
+            onAnchorKeyChange={setAnchorKey}
+            labelKey="hunting.periodLabel"
+          />
+
           <div className="hunting-kpi" role="group" aria-label={t("hunting.bids.pipeline")}>
             <button
               type="button"
@@ -202,71 +176,6 @@ export function HuntingBidsPage() {
               </button>
             ))}
           </div>
-
-          {creating && (
-            <form className="panel hunting-create" onSubmit={(e) => void onAdd(e)}>
-              <header className="hunting-panel-head">
-                <h2>{t("hunting.bids.new")}</h2>
-                <p className="muted small">{t("hunting.bids.createHint")}</p>
-              </header>
-              <div className="hunting-form-grid">
-                <label className="field">
-                  <span>{t("common.company")}</span>
-                  <input
-                    value={company}
-                    onChange={(e) => setCompany(e.target.value)}
-                    placeholder={t("hunting.bids.companyPlaceholder")}
-                    required
-                    autoComplete="organization"
-                  />
-                </label>
-                <label className="field">
-                  <span>{t("common.role")}</span>
-                  <input
-                    value={roleTitle}
-                    onChange={(e) => setRoleTitle(e.target.value)}
-                    placeholder={t("hunting.bids.rolePlaceholder")}
-                    required
-                  />
-                </label>
-                <label className="field">
-                  <span>{t("hunting.bids.url")}</span>
-                  <input
-                    type="url"
-                    value={sourceUrl}
-                    onChange={(e) => setSourceUrl(e.target.value)}
-                    placeholder="https://"
-                    inputMode="url"
-                  />
-                </label>
-                <label className="field">
-                  <span>{t("hunting.bids.amount")}</span>
-                  <input
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="0.00"
-                    inputMode="decimal"
-                  />
-                </label>
-                <label className="field hunting-span-2">
-                  <span>{t("common.notes")}</span>
-                  <input
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder={t("hunting.bids.notesPlaceholder")}
-                  />
-                </label>
-              </div>
-              <div className="row-actions">
-                <button className="btn primary" type="submit" disabled={saving}>
-                  {saving ? t("common.saving") : t("hunting.bids.create")}
-                </button>
-                <button type="button" className="btn ghost" onClick={() => setCreating(false)}>
-                  {t("common.cancel")}
-                </button>
-              </div>
-            </form>
-          )}
 
           <div className="hunting-toolbar panel">
             <label className="field hunting-search">
@@ -303,7 +212,7 @@ export function HuntingBidsPage() {
             {loading && <p className="muted small hunting-pad">{t("common.loading")}</p>}
             {!loading && items.length === 0 && (
               <div className="empty-state hunting-empty">
-                <p>{t("hunting.bids.empty")}</p>
+                <p>{t("hunting.bids.emptyPeriod")}</p>
               </div>
             )}
             {!loading &&

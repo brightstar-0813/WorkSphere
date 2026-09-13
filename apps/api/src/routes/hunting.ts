@@ -4,22 +4,35 @@ import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { ownerFilter, requireAuth } from "../auth.js";
 import { createScheduleEvent, deleteLinkedCalendarEvents } from "../calendarSync.js";
+import { countIcsScheduleEvents, listIcsScheduleEvents } from "../integrations/icsSync.js";
 import { listMeta, parsePagination } from "../pagination.js";
+import {
+  bidDateFilter,
+  interviewListDateFilter,
+  parseAnchorDate,
+  parsePeriod,
+  resolvePeriod,
+} from "../period.js";
+import { resolveActorTimeZone } from "../requestTimeZone.js";
 import { attachScheduleRoutes } from "./schedules.js";
+import { interviewProgressRouter } from "./interviewProgress.js";
 import {
   appendJobToSpreadsheet,
   fetchSheetJobRows,
   mapSheetStatusToBidStatus,
   markJobAppliedOnSpreadsheet,
   normalizeJobLink,
+  parseSheetDate,
   sheetStatusLooksReady,
 } from "../integrations/bidSheet.js";
 import {
   fetchJobsFromCaptureBot,
   normalizeCaptureBotUrl,
   parseCaptureCsv,
+  serializeCaptureCsv,
   type CaptureJobInput,
 } from "../integrations/captureBot.js";
+import { ensureAllIcsFeedHuntingProfiles } from "../integrations/icsSync.js";
 
 export const huntingRouter = Router();
 huntingRouter.use(requireAuth);
@@ -29,6 +42,7 @@ const optionalUrl = z.union([z.string().url(), z.literal(""), z.null()]).optiona
 const profileBody = z.object({
   name: z.string().min(1).optional(),
   label: z.string().optional(),
+  country: z.string().max(80).optional(),
   active: z.boolean().optional(),
   spreadsheetUrl: z.string().optional(),
   sheetsWebAppUrl: z.string().optional(),
@@ -113,12 +127,24 @@ function sheetConfigFor(profile: {
 huntingRouter.get("/profiles", async (req, res) => {
   const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
   const activeOnly = req.query.active === "true";
+  const country =
+    typeof req.query.country === "string" ? req.query.country.trim() : "";
+  // Imported calendars get hunting profiles so they appear in Bid Tracking
+  if (where.userId) {
+    await ensureAllIcsFeedHuntingProfiles(where.userId);
+  } else if (req.user!.role !== "ADMIN") {
+    await ensureAllIcsFeedHuntingProfiles(req.user!.id);
+  }
   const data = await prisma.huntingProfile.findMany({
     where: {
       ...where,
       ...(activeOnly ? { active: true } : {}),
+      ...(country ? { country: { equals: country, mode: "insensitive" } } : {}),
     },
-    orderBy: [{ active: "desc" }, { name: "asc" }],
+    include: {
+      icsFeed: { select: { id: true, label: true, color: true, url: true } },
+    },
+    orderBy: [{ active: "desc" }, { country: "asc" }, { name: "asc" }],
   });
   return res.json({ data });
 });
@@ -133,6 +159,7 @@ huntingRouter.post("/profiles", async (req, res) => {
       userId: req.user!.id,
       name: parsed.data.name.trim(),
       label: parsed.data.label?.trim() ?? "",
+      country: parsed.data.country?.trim() ?? "",
       active: parsed.data.active ?? true,
       spreadsheetUrl: parsed.data.spreadsheetUrl?.trim() ?? "",
       sheetsWebAppUrl: parsed.data.sheetsWebAppUrl?.trim() ?? "",
@@ -159,6 +186,7 @@ huntingRouter.patch("/profiles/:id", async (req, res) => {
     data: {
       name: parsed.data.name?.trim(),
       label: parsed.data.label === undefined ? undefined : parsed.data.label.trim(),
+      country: parsed.data.country === undefined ? undefined : parsed.data.country.trim(),
       active: parsed.data.active,
       spreadsheetUrl:
         parsed.data.spreadsheetUrl === undefined ? undefined : parsed.data.spreadsheetUrl.trim(),
@@ -226,6 +254,11 @@ huntingRouter.post("/profiles/:id/sheet/sync", async (req, res) => {
       const bidStatus = sheetStatusLooksReady(row.status)
         ? ("DRAFT" as const)
         : mapSheetStatusToBidStatus(row.status);
+      const sheetDate = parseSheetDate(row.date);
+      const appliedLike =
+        bidStatus === "SENT" || bidStatus === "SHORTLISTED" || bidStatus === "WON";
+      // Sheet "Created Date" drives Daily/Weekly/Monthly views; fall back to now for applied rows.
+      const resolvedAppliedAt = sheetDate ?? (appliedLike ? new Date() : null);
 
       const existingBid = await prisma.huntingBid.findFirst({
         where: { profileId: profile.id, sheetKey },
@@ -241,9 +274,9 @@ huntingRouter.post("/profiles/:id/sheet/sync", async (req, res) => {
             salary: row.salary || existingBid.salary,
             source: "SHEET",
             appliedAt:
-              bidStatus === "SENT" || bidStatus === "SHORTLISTED" || bidStatus === "WON"
-                ? existingBid.appliedAt ?? new Date()
-                : existingBid.appliedAt,
+              sheetDate ??
+              existingBid.appliedAt ??
+              (appliedLike ? new Date() : existingBid.appliedAt),
           },
         });
         bidsUpdated += 1;
@@ -259,10 +292,7 @@ huntingRouter.post("/profiles/:id/sheet/sync", async (req, res) => {
             sheetKey,
             sourceUrl,
             salary: row.salary || "",
-            appliedAt:
-              bidStatus === "SENT" || bidStatus === "SHORTLISTED" || bidStatus === "WON"
-                ? new Date()
-                : null,
+            appliedAt: resolvedAppliedAt,
           },
         });
         bidsCreated += 1;
@@ -388,7 +418,10 @@ huntingRouter.post("/profiles/:id/capture/import-csv", async (req, res) => {
   const csvText = typeof req.body?.csv === "string" ? req.body.csv : "";
   if (!csvText.trim()) {
     return res.status(400).json({
-      error: { code: "VALIDATION", message: "Body must include csv text (sf-job-capture jobs_latest.csv)." },
+      error: {
+        code: "VALIDATION",
+        message: "Body must include csv text with columns: title, company, link, salary, jd.",
+      },
     });
   }
 
@@ -406,7 +439,39 @@ huntingRouter.post("/profiles/:id/capture/import-csv", async (req, res) => {
   }
 });
 
-/* ── Job fetch (CapturedJob) ──────────────────────────────── */
+huntingRouter.get("/profiles/:id/capture/export-csv", async (req, res) => {
+  const check = await assertProfileOwned(req.params.id, req.user!.id, req.user!.role);
+  if ("error" in check && check.error === "NOT_FOUND") {
+    return res.status(404).json({ error: { code: "NOT_FOUND", message: "Not found" } });
+  }
+  if ("error" in check && check.error === "FORBIDDEN") {
+    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Not yours" } });
+  }
+
+  const jobs = await prisma.capturedJob.findMany({
+    where: { profileId: check.profile!.id },
+    orderBy: { capturedAt: "desc" },
+  });
+  const csv = serializeCaptureCsv(jobs);
+  const safeName = (check.profile!.name || "jobs").replace(/[^\w.-]+/g, "_");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeName}-jobs.csv"`);
+  return res.send(csv);
+});
+
+huntingRouter.get("/fetch/export-csv", async (req, res) => {
+  const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
+  const jobs = await prisma.capturedJob.findMany({
+    where,
+    orderBy: { capturedAt: "desc" },
+  });
+  const csv = serializeCaptureCsv(jobs);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="jobs.csv"');
+  return res.send(csv);
+});
+
+/* ── New jobs / Job fetch (CapturedJob) ───────────────────── */
 
 huntingRouter.get("/fetch", async (req, res) => {
   const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
@@ -434,6 +499,7 @@ huntingRouter.get("/fetch", async (req, res) => {
             { company: { contains: q, mode: "insensitive" } },
             { description: { contains: q, mode: "insensitive" } },
             { salary: { contains: q, mode: "insensitive" } },
+            { sourceUrl: { contains: q, mode: "insensitive" } },
           ],
         }
       : {}),
@@ -621,24 +687,36 @@ huntingRouter.get("/bids", async (req, res) => {
   const statusParsed = z.enum(bidStatuses).safeParse(req.query.status);
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const { page, pageSize, skip, take } = parsePagination(req.query as Record<string, unknown>);
+  const scopeUserId = typeof where.userId === "string" ? where.userId : req.user!.id;
+  const timeZone = await resolveActorTimeZone(req, scopeUserId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
+  const dateFilter = bidDateFilter(range);
+
+  const andFilters: Prisma.HuntingBidWhereInput[] = [dateFilter];
+  if (q) {
+    andFilters.push({
+      OR: [
+        { company: { contains: q, mode: "insensitive" } },
+        { roleTitle: { contains: q, mode: "insensitive" } },
+        { notes: { contains: q, mode: "insensitive" } },
+        { salary: { contains: q, mode: "insensitive" } },
+      ],
+    });
+  }
 
   const baseWhere: Prisma.HuntingBidWhereInput = {
     ...where,
     ...(profileId ? { profileId } : {}),
+    ...dateFilter,
   };
   const listWhere: Prisma.HuntingBidWhereInput = {
-    ...baseWhere,
+    ...where,
+    ...(profileId ? { profileId } : {}),
     ...(statusParsed.success ? { status: statusParsed.data } : {}),
-    ...(q
-      ? {
-          OR: [
-            { company: { contains: q, mode: "insensitive" } },
-            { roleTitle: { contains: q, mode: "insensitive" } },
-            { notes: { contains: q, mode: "insensitive" } },
-            { salary: { contains: q, mode: "insensitive" } },
-          ],
-        }
-      : {}),
+    AND: andFilters,
   };
 
   const [total, data, statusGroups] = await Promise.all([
@@ -830,52 +908,239 @@ huntingRouter.delete("/bids/:id", async (req, res) => {
 
 /* ── Interviews ───────────────────────────────────────────── */
 
+async function linkedHuntingScheduleIds(opts: {
+  userId?: string;
+  interviewIds?: string[];
+  startsAt?: { gte: Date; lt: Date };
+}) {
+  const rows = await prisma.calendarEvent.findMany({
+    where: {
+      sourceType: "HUNTING",
+      ...(opts.userId ? { userId: opts.userId } : {}),
+      ...(opts.interviewIds ? { sourceId: { in: opts.interviewIds } } : {}),
+      ...(opts.startsAt ? { startsAt: opts.startsAt } : {}),
+    },
+    select: { sourceId: true, startsAt: true, endsAt: true },
+    orderBy: { startsAt: "asc" },
+  });
+  const byInterview = new Map<string, { startsAt: Date; endsAt: Date | null; count: number }>();
+  for (const row of rows) {
+    if (!row.sourceId) continue;
+    const prev = byInterview.get(row.sourceId);
+    if (!prev) {
+      byInterview.set(row.sourceId, { startsAt: row.startsAt, endsAt: row.endsAt, count: 1 });
+    } else {
+      prev.count += 1;
+    }
+  }
+  return byInterview;
+}
+
+async function enrichInterviewsWithSchedules<
+  T extends {
+    id: string;
+    scheduledAt: Date | null;
+    scheduleEndsAt: Date | null;
+  },
+>(rows: T[], userId?: string) {
+  if (rows.length === 0) return rows as Array<T & { scheduleCount: number }>;
+  const linked = await linkedHuntingScheduleIds({
+    userId,
+    interviewIds: rows.map((r) => r.id),
+  });
+  return rows.map((row) => {
+    const sched = linked.get(row.id);
+    const scheduledAt = row.scheduledAt ?? sched?.startsAt ?? null;
+    const scheduleEndsAt = row.scheduleEndsAt ?? sched?.endsAt ?? null;
+    const scheduleCount = sched?.count ?? (row.scheduledAt ? 1 : 0);
+    return { ...row, scheduledAt, scheduleEndsAt, scheduleCount };
+  });
+}
+
 huntingRouter.get("/interviews", async (req, res) => {
   const where = ownerFilter(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
   const profileId = typeof req.query.profileId === "string" ? req.query.profileId : undefined;
+  const icsFeedId = typeof req.query.icsFeedId === "string" ? req.query.icsFeedId : undefined;
   const statusParsed = z.enum(interviewStatuses).safeParse(req.query.status);
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const { page, pageSize, skip, take } = parsePagination(req.query as Record<string, unknown>);
+  const scopeUserId = typeof where.userId === "string" ? where.userId : req.user!.id;
+  const timeZone = await resolveActorTimeZone(req, scopeUserId);
+  const period = parsePeriod(req.query.period);
+  const anchor = parseAnchorDate(req.query.date, timeZone);
+  const { from, to } = resolvePeriod(period, anchor, timeZone);
+  const range = { gte: from, lt: to };
+  const icsStartsAt = range;
+  const dateFilter = interviewListDateFilter(range);
+  const ownerUserId = typeof where.userId === "string" ? where.userId : undefined;
+
+  /* Imported ICS calendar → interview schedules for that feed */
+  if (icsFeedId) {
+    const feed = await prisma.calendarIcsFeed.findFirst({
+      where: { id: icsFeedId, ...(where.userId ? { userId: where.userId } : {}) },
+    });
+    if (!feed) {
+      return res.status(404).json({ error: { code: "NOT_FOUND", message: "Imported calendar not found" } });
+    }
+
+    const status = statusParsed.success ? statusParsed.data : undefined;
+    const scheduledCount = await countIcsScheduleEvents({
+      userId: feed.userId,
+      feedId: feed.id,
+      startsAt: icsStartsAt,
+    });
+    if (status && status !== "SCHEDULED") {
+      const emptyCounts = Object.fromEntries(interviewStatuses.map((s) => [s, 0])) as Record<
+        (typeof interviewStatuses)[number],
+        number
+      >;
+      emptyCounts.SCHEDULED = scheduledCount;
+      return res.json({
+        data: [],
+        meta: { ...listMeta(0, page, pageSize), countsByStatus: emptyCounts },
+      });
+    }
+
+    const [total, rows] = await Promise.all([
+      countIcsScheduleEvents({
+        userId: feed.userId,
+        feedId: feed.id,
+        q: q || undefined,
+        startsAt: icsStartsAt,
+      }),
+      listIcsScheduleEvents({
+        userId: feed.userId,
+        feedId: feed.id,
+        q: q || undefined,
+        startsAt: icsStartsAt,
+        skip,
+        take,
+      }),
+    ]);
+
+    const countsByStatus = Object.fromEntries(interviewStatuses.map((s) => [s, 0])) as Record<
+      (typeof interviewStatuses)[number],
+      number
+    >;
+    countsByStatus.SCHEDULED = scheduledCount;
+
+    return res.json({
+      data: rows.map((r) => ({ ...r, scheduleCount: 1 })),
+      meta: { ...listMeta(total, page, pageSize), countsByStatus },
+    });
+  }
+
+  const includeImported = req.query.includeImported !== "false";
+  const statusFilterActive = statusParsed.success ? statusParsed.data : undefined;
+  const canIncludeIcs =
+    includeImported && (!statusFilterActive || statusFilterActive === "SCHEDULED");
+
+  const linkedInPeriod = await linkedHuntingScheduleIds({
+    userId: ownerUserId,
+    startsAt: range,
+  });
+  let linkedIds = [...linkedInPeriod.keys()];
+  if (linkedIds.length > 0 && profileId) {
+    const owned = await prisma.huntingInterview.findMany({
+      where: { id: { in: linkedIds }, profileId, ...where },
+      select: { id: true },
+    });
+    linkedIds = owned.map((r) => r.id);
+  }
+
+  const huntingDateClause: Prisma.HuntingInterviewWhereInput =
+    linkedIds.length > 0
+      ? { OR: [dateFilter, { id: { in: linkedIds } }] }
+      : dateFilter;
 
   const baseWhere: Prisma.HuntingInterviewWhereInput = {
     ...where,
     ...(profileId ? { profileId } : {}),
+    ...huntingDateClause,
   };
+  const andFilters: Prisma.HuntingInterviewWhereInput[] = [huntingDateClause];
+  if (q) {
+    andFilters.push({
+      OR: [
+        { company: { contains: q, mode: "insensitive" } },
+        { roleTitle: { contains: q, mode: "insensitive" } },
+        { notes: { contains: q, mode: "insensitive" } },
+      ],
+    });
+  }
   const listWhere: Prisma.HuntingInterviewWhereInput = {
-    ...baseWhere,
+    ...where,
+    ...(profileId ? { profileId } : {}),
     ...(statusParsed.success ? { status: statusParsed.data } : {}),
-    ...(q
-      ? {
-          OR: [
-            { company: { contains: q, mode: "insensitive" } },
-            { roleTitle: { contains: q, mode: "insensitive" } },
-            { notes: { contains: q, mode: "insensitive" } },
-          ],
-        }
-      : {}),
+    ...(andFilters.length > 0 ? { AND: andFilters } : {}),
   };
 
-  const [total, data, statusGroups] = await Promise.all([
+  const [huntingTotal, huntingRows, statusGroups, icsScheduledCount] = await Promise.all([
     prisma.huntingInterview.count({ where: listWhere }),
     prisma.huntingInterview.findMany({
       where: listWhere,
       orderBy: [{ scheduledAt: "asc" }, { updatedAt: "desc" }],
-      skip,
-      take,
+      // Fetch period window for merge; paginate after combining with ICS
+      take: canIncludeIcs ? 500 : take,
+      skip: canIncludeIcs ? 0 : skip,
     }),
     prisma.huntingInterview.groupBy({
       by: ["status"],
       where: baseWhere,
       _count: { _all: true },
     }),
+    canIncludeIcs
+      ? countIcsScheduleEvents({
+          userId: ownerUserId,
+          profileId,
+          startsAt: icsStartsAt,
+          q: q || undefined,
+        })
+      : Promise.resolve(0),
   ]);
 
   const countsByStatus = Object.fromEntries(
     interviewStatuses.map((s) => [s, statusGroups.find((g) => g.status === s)?._count._all ?? 0]),
   ) as Record<(typeof interviewStatuses)[number], number>;
+  if (canIncludeIcs) {
+    countsByStatus.SCHEDULED = (countsByStatus.SCHEDULED ?? 0) + icsScheduledCount;
+  }
+
+  const enrichedHunting = await enrichInterviewsWithSchedules(huntingRows, ownerUserId);
+  const huntingMapped = enrichedHunting.map((row) => ({
+    ...row,
+    source: "HUNTING" as const,
+    readOnly: false as const,
+  }));
+
+  if (!canIncludeIcs) {
+    return res.json({
+      data: huntingMapped,
+      meta: { ...listMeta(huntingTotal, page, pageSize), countsByStatus },
+    });
+  }
+
+  const icsRows = await listIcsScheduleEvents({
+    userId: ownerUserId,
+    profileId,
+    startsAt: icsStartsAt,
+    q: q || undefined,
+    take: 500,
+  });
+
+  type Merged = (typeof huntingMapped)[number] | (typeof icsRows)[number];
+  const merged: Merged[] = [...huntingMapped, ...icsRows.map((r) => ({ ...r, scheduleCount: 1 }))];
+  merged.sort((a, b) => {
+    const aAt = a.scheduledAt ? new Date(a.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+    const bAt = b.scheduledAt ? new Date(b.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+    return aAt - bAt;
+  });
+
+  const total = huntingTotal + icsScheduledCount;
+  const pageRows = merged.slice(skip, skip + take);
 
   return res.json({
-    data,
+    data: pageRows,
     meta: { ...listMeta(total, page, pageSize), countsByStatus },
   });
 });
@@ -1033,3 +1298,4 @@ huntingRouter.delete("/interviews/:id", async (req, res) => {
 const interviewScheduleRouter = Router({ mergeParams: true });
 attachScheduleRoutes(interviewScheduleRouter, "HUNTING");
 huntingRouter.use("/interviews", interviewScheduleRouter);
+huntingRouter.use("/progress", interviewProgressRouter);

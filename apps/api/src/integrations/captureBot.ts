@@ -89,16 +89,49 @@ export function mapCaptureRecord(raw: Record<string, unknown>): CaptureJobInput 
       ? String(raw.salary)
       : formatSalary(raw as Record<string, string>);
 
+  const description = String(raw.jd || raw.description || raw.job_description || "").trim();
+
   return {
     externalId,
     title: title || "Untitled role",
     company: company || "Unknown",
     sourceUrl: url || null,
     salary,
-    description: String(raw.description || "").trim(),
-    platform: String(raw.source || raw.platform || "capture").trim() || "capture",
+    description,
+    platform: String(raw.source || raw.platform || "csv").trim() || "csv",
     payloadJson: JSON.stringify(raw),
   };
+}
+
+function csvEscape(value: string): string {
+  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+/** Export jobs as CSV with columns: title, company, link, salary, jd */
+export function serializeCaptureCsv(
+  jobs: Array<{
+    title: string;
+    company: string;
+    sourceUrl?: string | null;
+    salary: string;
+    description: string;
+  }>,
+): string {
+  const header = ["title", "company", "link", "salary", "jd"];
+  const lines = [header.join(",")];
+  for (const job of jobs) {
+    lines.push(
+      [
+        csvEscape(job.title ?? ""),
+        csvEscape(job.company ?? ""),
+        csvEscape(job.sourceUrl ?? ""),
+        csvEscape(job.salary ?? ""),
+        csvEscape(job.description ?? ""),
+      ].join(","),
+    );
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 export function parseCaptureCsv(text: string): CaptureJobInput[] {

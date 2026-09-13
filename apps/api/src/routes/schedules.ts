@@ -106,6 +106,20 @@ export function attachScheduleRoutes(
       recurUntil: parsed.data.recurUntil ? new Date(parsed.data.recurUntil) : null,
     });
 
+    // Keep HuntingInterview.scheduledAt in sync so Daily/Weekly filters and cards show the time.
+    if (sourceType === "HUNTING") {
+      const interview = await prisma.huntingInterview.findUnique({ where: { id: req.params.id } });
+      if (interview && (!interview.scheduledAt || startsAt < interview.scheduledAt)) {
+        await prisma.huntingInterview.update({
+          where: { id: interview.id },
+          data: {
+            scheduledAt: startsAt,
+            scheduleEndsAt: endsAt,
+          },
+        });
+      }
+    }
+
     return res.status(201).json({ data });
   });
 }

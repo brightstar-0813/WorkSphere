@@ -83,7 +83,6 @@ export function CalendarIntegrations({ onSynced }: Props) {
         }
         defaultOpen
       >
-        <p className="muted small">{t("calendar.ics.manageHint")}</p>
         <form className="cal-ics-form" onSubmit={(e) => void addIcs(e)}>
           <input
             type="url"

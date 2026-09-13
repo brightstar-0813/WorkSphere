@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { StatusBadge, statusTone } from "./StatusBadge";
 import type { HuntingProfile } from "./HuntingProfileSwitcher";
 
 type Props = {
@@ -94,6 +95,9 @@ export function HuntingSheetPanel({ profileId, onSynced }: Props) {
   }
 
   const configured = Boolean(spreadsheetUrl.trim() && sheetsWebAppUrl.trim());
+  const configLabel = configured
+    ? t("hunting.sheet.configured")
+    : t("hunting.sheet.notConfigured");
 
   return (
     <details
@@ -103,21 +107,18 @@ export function HuntingSheetPanel({ profileId, onSynced }: Props) {
     >
       <summary>
         <span>{t("hunting.sheet.heading")}</span>
-        {configured ? (
-          <StatusChip label={t("hunting.sheet.configured")} tone="success" />
-        ) : (
-          <StatusChip label={t("hunting.sheet.notConfigured")} tone="neutral" />
-        )}
+        <StatusBadge tone={configured ? "success" : statusTone("DRAFT")}>{configLabel}</StatusBadge>
       </summary>
-      <p className="muted small">{t("hunting.sheet.hint")}</p>
       <form className="hunting-sheet-form" onSubmit={(e) => void onSave(e)}>
         <label className="field">
           <span>{t("hunting.sheet.spreadsheetUrl")}</span>
           <input
             value={spreadsheetUrl}
             onChange={(e) => setSpreadsheetUrl(e.target.value)}
-            placeholder="https://docs.google.com/spreadsheets/..."
+            placeholder={t("hunting.sheet.spreadsheetUrlPlaceholder")}
             inputMode="url"
+            name="spreadsheetUrl"
+            autoComplete="off"
           />
         </label>
         <label className="field">
@@ -125,8 +126,10 @@ export function HuntingSheetPanel({ profileId, onSynced }: Props) {
           <input
             value={sheetsWebAppUrl}
             onChange={(e) => setSheetsWebAppUrl(e.target.value)}
-            placeholder="https://script.google.com/macros/..."
+            placeholder={t("hunting.sheet.webAppUrlPlaceholder")}
             inputMode="url"
+            name="sheetsWebAppUrl"
+            autoComplete="off"
           />
         </label>
         <label className="field">
@@ -134,7 +137,9 @@ export function HuntingSheetPanel({ profileId, onSynced }: Props) {
           <input
             value={sheetTabName}
             onChange={(e) => setSheetTabName(e.target.value)}
-            placeholder={profile?.name || "Edrwin-SF"}
+            placeholder={profile?.name || t("hunting.sheet.tabNamePlaceholder")}
+            name="sheetTabName"
+            autoComplete="off"
           />
         </label>
         <div className="row-actions">
@@ -160,8 +165,4 @@ export function HuntingSheetPanel({ profileId, onSynced }: Props) {
       {error && <p className="form-error">{error}</p>}
     </details>
   );
-}
-
-function StatusChip({ label, tone }: { label: string; tone: "success" | "neutral" }) {
-  return <span className={`hunting-sheet-chip tone-${tone}`}>{label}</span>;
 }

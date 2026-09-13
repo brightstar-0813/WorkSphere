@@ -162,6 +162,198 @@ export async function syncAllIcsFeeds(userId: string, from?: Date, to?: Date) {
   return results;
 }
 
+/** Count synced ICS feed events (imported calendars) — treated as hunting interview schedules. */
+export async function countIcsScheduleEvents(opts: {
+  userId?: string;
+  feedId?: string;
+  profileId?: string;
+  startsAt?: { gte?: Date; lt?: Date };
+  q?: string;
+}) {
+  const feeds = await prisma.calendarIcsFeed.findMany({
+    where: {
+      ...(opts.userId ? { userId: opts.userId } : {}),
+      ...(opts.feedId ? { id: opts.feedId } : {}),
+      ...(opts.profileId ? { profileId: opts.profileId } : {}),
+    },
+    select: { id: true },
+  });
+  if (feeds.length === 0) return 0;
+  const q = opts.q?.trim();
+  return prisma.calendarEvent.count({
+    where: {
+      ...(opts.userId ? { userId: opts.userId } : {}),
+      sourceType: { in: ["GOOGLE", "OUTLOOK"] },
+      sourceId: { in: feeds.map((f) => f.id) },
+      ...(opts.startsAt ? { startsAt: opts.startsAt } : {}),
+      ...(q
+        ? {
+            OR: [
+              { title: { contains: q, mode: "insensitive" } },
+              { description: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    },
+  });
+}
+
+export async function countIcsScheduleEventsByUser(opts: {
+  userIds: string[];
+  startsAt?: { gte?: Date; lt?: Date };
+}) {
+  if (opts.userIds.length === 0) return [] as Array<{ userId: string; count: number }>;
+  const feeds = await prisma.calendarIcsFeed.findMany({
+    where: { userId: { in: opts.userIds } },
+    select: { id: true },
+  });
+  if (feeds.length === 0) return [] as Array<{ userId: string; count: number }>;
+  const groups = await prisma.calendarEvent.groupBy({
+    by: ["userId"],
+    where: {
+      userId: { in: opts.userIds },
+      sourceType: { in: ["GOOGLE", "OUTLOOK"] },
+      sourceId: { in: feeds.map((f) => f.id) },
+      ...(opts.startsAt ? { startsAt: opts.startsAt } : {}),
+    },
+    _count: { _all: true },
+  });
+  return groups.map((g) => ({ userId: g.userId, count: g._count._all }));
+}
+
+/** List imported ICS calendar events as interview-schedule rows. */
+export async function listIcsScheduleEvents(opts: {
+  userId?: string;
+  feedId?: string;
+  /** Restrict to the ICS feed linked to this hunting profile */
+  profileId?: string;
+  startsAt?: { gte?: Date; lt?: Date };
+  q?: string;
+  skip?: number;
+  take?: number;
+}) {
+  const feeds = await prisma.calendarIcsFeed.findMany({
+    where: {
+      ...(opts.userId ? { userId: opts.userId } : {}),
+      ...(opts.feedId ? { id: opts.feedId } : {}),
+      ...(opts.profileId ? { profileId: opts.profileId } : {}),
+    },
+    select: { id: true, label: true, url: true, color: true, profileId: true },
+  });
+  if (feeds.length === 0) return [];
+  const feedById = Object.fromEntries(feeds.map((f) => [f.id, f]));
+  const q = opts.q?.trim();
+  const events = await prisma.calendarEvent.findMany({
+    where: {
+      ...(opts.userId ? { userId: opts.userId } : {}),
+      sourceType: { in: ["GOOGLE", "OUTLOOK"] },
+      sourceId: { in: feeds.map((f) => f.id) },
+      ...(opts.startsAt ? { startsAt: opts.startsAt } : {}),
+      ...(q
+        ? {
+            OR: [
+              { title: { contains: q, mode: "insensitive" } },
+              { description: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    },
+    include: {
+      user: { select: { id: true, name: true, email: true } },
+    },
+    orderBy: { startsAt: "asc" },
+    skip: opts.skip,
+    take: opts.take ?? 500,
+  });
+  return events.map((ev) => {
+    const feed = ev.sourceId ? feedById[ev.sourceId] : undefined;
+    return {
+      id: ev.id,
+      profileId: feed?.profileId || "",
+      feedId: feed?.id || ev.sourceId || "",
+      bidId: null as string | null,
+      company: ev.title,
+      roleTitle: feed?.label || ev.sourceType,
+      status: "SCHEDULED" as const,
+      notes: "",
+      scheduledAt: ev.startsAt,
+      scheduleEndsAt: ev.endsAt,
+      updatedAt: ev.updatedAt,
+      user: ev.user,
+      profile: feed?.profileId
+        ? { id: feed.profileId, name: feed.label }
+        : feed
+          ? { id: feed.id, name: feed.label }
+          : undefined,
+      source: "ICS" as const,
+      sourceType: ev.sourceType,
+      htmlLink: ev.htmlLink || feed?.url || null,
+      readOnly: true as const,
+    };
+  });
+}
+
+/**
+ * Ensure each ICS feed has a hunting profile so it appears in Bid Tracking.
+ * Reuses an existing profile with the same name when possible.
+ */
+export async function ensureIcsFeedHuntingProfile(feed: {
+  id: string;
+  userId: string;
+  label: string;
+  profileId: string | null;
+}) {
+  if (feed.profileId) {
+    const linked = await prisma.huntingProfile.findFirst({
+      where: { id: feed.profileId, userId: feed.userId },
+    });
+    if (linked) return linked;
+  }
+
+  const name = (feed.label || "Calendar").trim() || "Calendar";
+  const existing = await prisma.huntingProfile.findFirst({
+    where: { userId: feed.userId, name },
+    orderBy: { createdAt: "asc" },
+  });
+  let profile =
+    existing ??
+    (await prisma.huntingProfile.create({
+      data: {
+        userId: feed.userId,
+        name,
+        label: "",
+        sheetTabName: name,
+        active: true,
+      },
+    }));
+
+  // Drop the old generic "Calendar" platform note from auto-linked profiles.
+  if (/^calendar$/i.test(profile.label.trim())) {
+    profile = await prisma.huntingProfile.update({
+      where: { id: profile.id },
+      data: { label: "" },
+    });
+  }
+
+  if (feed.profileId !== profile.id) {
+    await prisma.calendarIcsFeed.update({
+      where: { id: feed.id },
+      data: { profileId: profile.id },
+    });
+  }
+  return profile;
+}
+
+/** Backfill hunting profiles for all ICS feeds missing a link. */
+export async function ensureAllIcsFeedHuntingProfiles(userId?: string) {
+  const feeds = await prisma.calendarIcsFeed.findMany({
+    where: userId ? { userId } : undefined,
+  });
+  for (const feed of feeds) {
+    await ensureIcsFeedHuntingProfile(feed);
+  }
+}
+
 export async function addIcsFeed(userId: string, urlRaw: string, label?: string) {
   const url = normalizeCalendarUrl(urlRaw);
   let parsed: URL;
@@ -175,18 +367,22 @@ export async function addIcsFeed(userId: string, urlRaw: string, label?: string)
   }
 
   const color = await nextIcsColor(userId);
-  const feed = await prisma.calendarIcsFeed.upsert({
+  const feedLabel = defaultLabelForUrl(url, label);
+  let feed = await prisma.calendarIcsFeed.upsert({
     where: { userId_url: { userId, url } },
     create: {
       userId,
       url,
-      label: defaultLabelForUrl(url, label),
+      label: feedLabel,
       color,
     },
     update: {
       label: label?.trim() || undefined,
     },
   });
+
+  await ensureIcsFeedHuntingProfile(feed);
+  feed = (await prisma.calendarIcsFeed.findUniqueOrThrow({ where: { id: feed.id } }))!;
 
   const windowFrom = new Date();
   windowFrom.setMonth(windowFrom.getMonth() - 1);
@@ -198,10 +394,22 @@ export async function addIcsFeed(userId: string, urlRaw: string, label?: string)
     return { feed, synced };
   } catch (err) {
     // Don't keep a feed that never synced successfully on first add
+    const orphanProfileId = feed.profileId;
     await prisma.calendarEvent.deleteMany({
       where: { userId, sourceId: feed.id, sourceType: { in: ["GOOGLE", "OUTLOOK"] } },
     });
     await prisma.calendarIcsFeed.delete({ where: { id: feed.id } }).catch(() => undefined);
+    if (orphanProfileId) {
+      const stillLinked = await prisma.calendarIcsFeed.findFirst({
+        where: { profileId: orphanProfileId },
+      });
+      if (!stillLinked) {
+        const bidCount = await prisma.huntingBid.count({ where: { profileId: orphanProfileId } });
+        if (bidCount === 0) {
+          await prisma.huntingProfile.delete({ where: { id: orphanProfileId } }).catch(() => undefined);
+        }
+      }
+    }
     throw err;
   }
 }

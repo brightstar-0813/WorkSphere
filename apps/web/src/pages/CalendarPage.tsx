@@ -4,6 +4,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { CalendarIntegrations } from "../components/CalendarIntegrations";
 import { CalendarLayers, type IcsLayerFeed, type SharedLayer } from "../components/CalendarLayers";
+import { huntingProfileStorageKey, isAllProfilesId } from "../components/HuntingProfileSwitcher";
 import { TimezonePicker } from "../components/TimezonePicker";
 import {
   ensureEnabledMap,
@@ -20,7 +21,7 @@ import {
 import type { CalEvent } from "../types/calendar";
 import {
   addZonedDays,
-  detectTimeZone,
+  DEFAULT_TIME_ZONE,
   endOfZonedDay,
   eventOccursOnZonedDay,
   formatZonedDayHeader,
@@ -28,6 +29,7 @@ import {
   formatZonedTime,
   formatZonedWeekday,
   fromZonedInput,
+  resolveAppTimeZone,
   sameZonedDay,
   startOfZonedDay,
   startOfZonedMonth,
@@ -222,14 +224,15 @@ function layoutTimedEvents(events: CalEvent[], day: Date, timeZone: string): Tim
 export function CalendarPage() {
   const { t, i18n } = useTranslation();
   const { user, setTimeZone } = useAuth();
-  const timeZone = user?.timeZone?.trim() || detectTimeZone();
+  const timeZone = resolveAppTimeZone(user?.timeZone);
 
   const [items, setItems] = useState<CalEvent[]>([]);
-  const [cursor, setCursor] = useState(() => startOfZonedDay(new Date(), detectTimeZone()));
+  const [cursor, setCursor] = useState(() => startOfZonedDay(new Date(), DEFAULT_TIME_ZONE));
   const [view, setView] = useState<ViewMode>("week");
-  const [selectedDay, setSelectedDay] = useState(() => startOfZonedDay(new Date(), detectTimeZone()));
+  const [selectedDay, setSelectedDay] = useState(() => startOfZonedDay(new Date(), DEFAULT_TIME_ZONE));
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [jobLayers, setJobLayers] = useState<CalendarLayerItem[]>([]);
   const [profileLayers, setProfileLayers] = useState<CalendarLayerItem[]>([]);
@@ -466,64 +469,81 @@ export function CalendarPage() {
   }, [cursor, view, timeZone]);
 
   async function load() {
-    const jobIds = jobLayers.filter((j) => enabled[j.id] !== false).map((j) => j.entityId);
-    const profileIds = profileLayers
-      .filter((p) => enabled[p.id] !== false)
-      .map((p) => p.entityId);
-    const enabledFeedIds = icsFeeds.filter((f) => feedVisible[f.id] !== false).map((f) => f.id);
-    const enabledShares = sharedLayers.filter((s) => shareVisible[s.id] !== false);
-    const shareOwnerIds = enabledShares.map((s) => s.ownerId);
+    setLoading(true);
+    try {
+      const jobIds = jobLayers.filter((j) => enabled[j.id] !== false).map((j) => j.entityId);
+      const profileIds = profileLayers
+        .filter((p) => enabled[p.id] !== false)
+        .map((p) => p.entityId);
+      const enabledFeedIds = icsFeeds.filter((f) => feedVisible[f.id] !== false).map((f) => f.id);
+      const enabledShares = sharedLayers.filter((s) => shareVisible[s.id] !== false);
+      const shareOwnerIds = enabledShares.map((s) => s.ownerId);
 
-    let data: CalEvent[] = [];
-    if (jobIds.length || profileIds.length) {
-      const entityParams = new URLSearchParams({
-        from: range.from.toISOString(),
-        to: range.to.toISOString(),
-        shared: "0",
-      });
-      if (jobIds.length) entityParams.set("jobIds", jobIds.join(","));
-      if (profileIds.length) entityParams.set("profileIds", profileIds.join(","));
-      data = await api<CalEvent[]>(`/calendar?${entityParams}`);
-    }
+      const entityPromise =
+        jobIds.length || profileIds.length
+          ? (() => {
+              const entityParams = new URLSearchParams({
+                from: range.from.toISOString(),
+                to: range.to.toISOString(),
+                shared: "0",
+              });
+              if (jobIds.length) entityParams.set("jobIds", jobIds.join(","));
+              if (profileIds.length) entityParams.set("profileIds", profileIds.join(","));
+              return api<CalEvent[]>(`/calendar?${entityParams}`);
+            })()
+          : Promise.resolve([] as CalEvent[]);
 
-    if (enabledFeedIds.length) {
-      const feedParams = new URLSearchParams({
-        from: range.from.toISOString(),
-        to: range.to.toISOString(),
-        types: "GOOGLE,OUTLOOK",
-        shared: "0",
-      });
-      const feedEvents = await api<CalEvent[]>(`/calendar?${feedParams}`);
+      const feedPromise = enabledFeedIds.length
+        ? (() => {
+            const feedParams = new URLSearchParams({
+              from: range.from.toISOString(),
+              to: range.to.toISOString(),
+              types: "GOOGLE,OUTLOOK",
+              shared: "0",
+            });
+            return api<CalEvent[]>(`/calendar?${feedParams}`);
+          })()
+        : Promise.resolve([] as CalEvent[]);
+
+      const sharePromise = shareOwnerIds.length
+        ? (() => {
+            const shareParams = new URLSearchParams({
+              from: range.from.toISOString(),
+              to: range.to.toISOString(),
+              shared: "1",
+              shareOwnerIds: shareOwnerIds.join(","),
+            });
+            return api<CalEvent[]>(`/calendar?${shareParams}`);
+          })()
+        : Promise.resolve([] as CalEvent[]);
+
+      const [entityEvents, feedEvents, sharedEvents] = await Promise.all([
+        entityPromise,
+        feedPromise,
+        sharePromise,
+      ]);
+
       const feedIdSet = new Set(enabledFeedIds);
-      data = [
-        ...data,
+      const data = [
+        ...entityEvents,
         ...feedEvents.filter(
           (ev) =>
             (ev.sourceType === "GOOGLE" || ev.sourceType === "OUTLOOK") &&
             ev.sourceId &&
-            feedIdSet.has(ev.sourceId)
+            feedIdSet.has(ev.sourceId),
         ),
+        ...sharedEvents.filter((ev) => Boolean(ev.sharedFrom)),
       ];
+      setItems(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common.error"));
+    } finally {
+      setLoading(false);
     }
-
-    if (shareOwnerIds.length) {
-      const shareParams = new URLSearchParams({
-        from: range.from.toISOString(),
-        to: range.to.toISOString(),
-        shared: "1",
-        shareOwnerIds: shareOwnerIds.join(","),
-      });
-      const sharedEvents = await api<CalEvent[]>(`/calendar?${shareParams}`);
-      data = [...data, ...sharedEvents.filter((ev) => Boolean(ev.sharedFrom))];
-    }
-
-    setItems(data);
   }
 
   useEffect(() => {
-    void refreshCatalog();
-    void refreshIcsFeeds();
-    void refreshShares();
+    void Promise.all([refreshCatalog(), refreshIcsFeeds(), refreshShares()]);
   }, [refreshCatalog, refreshIcsFeeds, refreshShares]);
 
   useEffect(() => {
@@ -751,8 +771,8 @@ export function CalendarPage() {
     <section className="page calendar-page gcal">
       <div className="gcal-shell">
         <aside className="gcal-rail">
-          <button className="btn primary gcal-create" onClick={() => openCreate(selectedDay)}>
-            + {t("calendar.new")}
+          <button className="btn primary gcal-create" type="button" onClick={() => openCreate(selectedDay)}>
+            {t("calendar.createCta")}
           </button>
 
           <CalendarLayers
@@ -788,13 +808,23 @@ export function CalendarPage() {
         <div className="gcal-main">
           <div className="cal-toolbar">
             <div className="cal-nav">
-              <button className="btn" onClick={goToday}>
+              <button className="btn" type="button" onClick={goToday}>
                 {t("calendar.today")}
               </button>
-              <button className="btn ghost" onClick={() => shift(-1)}>
+              <button
+                className="btn ghost"
+                type="button"
+                aria-label={t("common.prev")}
+                onClick={() => shift(-1)}
+              >
                 ‹
               </button>
-              <button className="btn ghost" onClick={() => shift(1)}>
+              <button
+                className="btn ghost"
+                type="button"
+                aria-label={t("common.next")}
+                onClick={() => shift(1)}
+              >
                 ›
               </button>
               <strong className="cal-period">{titleLabel}</strong>
@@ -813,6 +843,7 @@ export function CalendarPage() {
           </div>
 
           <div className="cal-main panel">
+            {loading && <p className="muted small hunting-pad">{t("common.loading")}</p>}
             {view === "month" && (
               <div className="cal-month">
                 <div className="cal-weekdays">
@@ -836,22 +867,27 @@ export function CalendarPage() {
                       >
                         <span className="cal-date">{zonedDayNumber(day, timeZone)}</span>
                         <div className="cal-chips">
-                          {dayEvents.slice(0, 4).map((ev) => (
-                            <span
-                              key={ev.id}
-                              className={`cal-chip src-${ev.sourceType.toLowerCase()}${ev.sharedFrom ? " is-shared" : ""}`}
-                              style={eventAccentStyle(ev)}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openEdit(ev);
-                              }}
-                              title={`${ev.title} ${formatEventTime(ev, i18n.language, timeZone)}`}
-                            >
-                              {ev.allDay
-                                ? ev.title
-                                : `${formatEventTime(ev, i18n.language, timeZone)} ${ev.title}`}
-                            </span>
-                          ))}
+                          {dayEvents.slice(0, 4).map((ev) => {
+                            const label = ev.allDay
+                              ? ev.title
+                              : `${formatEventTime(ev, i18n.language, timeZone)} ${ev.title}`;
+                            return (
+                              <button
+                                type="button"
+                                key={ev.id}
+                                className={`cal-chip src-${ev.sourceType.toLowerCase()}${ev.sharedFrom ? " is-shared" : ""}`}
+                                style={eventAccentStyle(ev)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEdit(ev);
+                                }}
+                                title={`${ev.title} ${formatEventTime(ev, i18n.language, timeZone)}`}
+                                aria-label={label}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
                           {dayEvents.length > 4 && (
                             <span className="cal-more">+{dayEvents.length - 4}</span>
                           )}
@@ -1109,8 +1145,8 @@ export function CalendarPage() {
                 />
               </label>
             </div>
-            <p className="muted small">
-              {t("calendar.timezone.hint")} · {timeZone.replace(/_/g, " ")}
+            <p className="muted small" translate="no">
+              {timeZone.replace(/_/g, " ")}
             </p>
             <label className="field">
               <span>{t("common.notes")}</span>

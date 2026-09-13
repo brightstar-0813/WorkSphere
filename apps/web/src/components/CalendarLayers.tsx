@@ -11,6 +11,8 @@ export type IcsLayerFeed = {
   id: string;
   label: string;
   color: string;
+  /** Hunting profile this feed is attached to (SSOT link) */
+  profileId?: string | null;
 };
 
 export type SharedLayer = {
@@ -280,6 +282,34 @@ export function CalendarLayers({
     );
   }
 
+  function renderManagedRows(rows: ManagedRow[]) {
+    return rows.map((row) => (
+      <ManagedLayerRow
+        key={row.key}
+        row={row}
+        editing={editing === row.key}
+        panelId={panelId}
+        renaming={renamingKey === row.key}
+        renameValue={renameValue}
+        onEdit={() => setEditing((cur) => (cur === row.key ? null : row.key))}
+        onStartRename={() => {
+          setRenamingKey(row.key);
+          setRenameValue(row.label);
+        }}
+        onRenameValue={setRenameValue}
+        onCommitRename={() => {
+          const next = renameValue.trim();
+          if (next && next !== row.label) row.onRename?.(next);
+          setRenamingKey(null);
+        }}
+        onCancelRename={() => setRenamingKey(null)}
+        rowRef={(el) => {
+          rowRefs.current[row.key] = el;
+        }}
+      />
+    ));
+  }
+
   function renderManagedGroup(
     label: string,
     emptyKey: string,
@@ -291,36 +321,16 @@ export function CalendarLayers({
       <div className="gcal-layer-group">
         <p className="nav-label">{label}</p>
         {rows.length === 0 && <p className="muted small">{t(emptyKey)}</p>}
-        {rows.map((row) => (
-          <ManagedLayerRow
-            key={row.key}
-            row={row}
-            editing={editing === row.key}
-            panelId={panelId}
-            renaming={renamingKey === row.key}
-            renameValue={renameValue}
-            onEdit={() => setEditing((cur) => (cur === row.key ? null : row.key))}
-            onStartRename={() => {
-              setRenamingKey(row.key);
-              setRenameValue(row.label);
-            }}
-            onRenameValue={setRenameValue}
-            onCommitRename={() => {
-              const next = renameValue.trim();
-              if (next && next !== row.label) row.onRename?.(next);
-              setRenamingKey(null);
-            }}
-            onCancelRename={() => setRenamingKey(null)}
-            rowRef={(el) => {
-              rowRefs.current[row.key] = el;
-            }}
-          />
-        ))}
+        {renderManagedRows(rows)}
       </div>
     );
   }
 
-  const feedRows: ManagedRow[] = feeds.map((feed, index) => {
+  const profileIds = new Set(profiles.map((p) => p.entityId));
+  const linkedFeeds = feeds.filter((f) => f.profileId && profileIds.has(f.profileId));
+  const orphanFeeds = feeds.filter((f) => !f.profileId || !profileIds.has(f.profileId));
+
+  function feedToRow(feed: IcsLayerFeed, index: number): ManagedRow {
     const color = feed.color || colorForIndex(index);
     const key = `feed:${feed.id}`;
     return {
@@ -340,7 +350,9 @@ export function CalendarLayers({
       onRename: (label) => onFeedLabelChange?.(feed.id, label),
       onDelete: onFeedDelete ? () => onFeedDelete(feed.id) : undefined,
     };
-  });
+  }
+
+  const orphanFeedRows = orphanFeeds.map((feed, index) => feedToRow(feed, index + profiles.length));
 
   const shareRows: ManagedRow[] = shares.map((share, index) => {
     const color = share.color || colorForIndex(index + 3);
@@ -367,8 +379,62 @@ export function CalendarLayers({
   return (
     <div className="gcal-layers">
       {renderEntityGroup(t("calendar.layers.jobs"), jobs, "calendar.layers.noJobs")}
-      {renderEntityGroup(t("calendar.layers.profiles"), profiles, "calendar.layers.noProfiles")}
-      {renderManagedGroup(t("calendar.layers.external"), "calendar.layers.noExternal", feedRows)}
+      <div className="gcal-layer-group">
+        <p className="nav-label">{t("calendar.layers.profiles")}</p>
+        {profiles.length === 0 && orphanFeedRows.length === 0 && (
+          <p className="muted small">{t("calendar.layers.noProfiles")}</p>
+        )}
+        {profiles.map((layer, index) => {
+          const color = colors[layer.id] ?? colorForIndex(index);
+          const childFeeds = linkedFeeds.filter((f) => f.profileId === layer.entityId);
+          return (
+            <div key={layer.id} className="gcal-profile-stack">
+              <ManagedLayerRow
+                row={{
+                  key: layer.id,
+                  label: layer.name,
+                  color,
+                  checked: enabled[layer.id] !== false,
+                  onToggle: (on) => onToggle(layer.id, on),
+                  onColorChange: (c) => {
+                    onColorChange(layer.id, c);
+                    setEditing(null);
+                  },
+                  onResetColor: () => {
+                    onColorChange(layer.id, colorForIndex(index));
+                    setEditing(null);
+                  },
+                }}
+                editing={editing === layer.id}
+                panelId={panelId}
+                renaming={false}
+                renameValue=""
+                onEdit={() => setEditing((cur) => (cur === layer.id ? null : layer.id))}
+                onStartRename={() => undefined}
+                onRenameValue={() => undefined}
+                onCommitRename={() => undefined}
+                onCancelRename={() => undefined}
+                rowRef={(el) => {
+                  rowRefs.current[layer.id] = el;
+                }}
+              />
+              {childFeeds.length > 0 && (
+                <div className="gcal-nested-feeds">
+                  {renderManagedRows(
+                    childFeeds.map((feed, i) => feedToRow(feed, index * 10 + i + 1)),
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {orphanFeedRows.length > 0 && (
+          <>
+            <p className="nav-label layer-sublabel">{t("calendar.layers.external")}</p>
+            {renderManagedRows(orphanFeedRows)}
+          </>
+        )}
+      </div>
       {renderManagedGroup(t("calendar.layers.shared"), "calendar.layers.noShared", shareRows, true)}
     </div>
   );

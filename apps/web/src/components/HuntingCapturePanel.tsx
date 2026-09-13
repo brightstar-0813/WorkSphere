@@ -1,7 +1,7 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api } from "../api";
-import type { HuntingProfile } from "./HuntingProfileSwitcher";
+import { api, getToken } from "../api";
+import { apiUrl } from "../config";
 
 type Props = {
   profileId: string | null;
@@ -18,80 +18,13 @@ type SyncMeta = {
 export function HuntingCapturePanel({ profileId, onSynced }: Props) {
   const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [profile, setProfile] = useState<HuntingProfile | null>(null);
-  const [captureBotUrl, setCaptureBotUrl] = useState("http://127.0.0.1:3847");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [open, setOpen] = useState(true);
-
-  const load = useCallback(async () => {
-    if (!profileId) {
-      setProfile(null);
-      return;
-    }
-    const list = await api<HuntingProfile[]>("/hunting/profiles");
-    const row = list.find((p) => p.id === profileId) ?? null;
-    setProfile(row);
-    setCaptureBotUrl(row?.captureBotUrl || "http://127.0.0.1:3847");
-  }, [profileId]);
-
-  useEffect(() => {
-    void load();
-    setMessage("");
-    setError("");
-  }, [load]);
 
   if (!profileId) return null;
 
-  async function onSave(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    setMessage("");
-    try {
-      const updated = await api<HuntingProfile>(`/hunting/profiles/${profileId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ captureBotUrl: captureBotUrl.trim() }),
-      });
-      setProfile(updated);
-      setMessage(t("hunting.capture.saved"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("common.error"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onSync() {
-    setBusy(true);
-    setError("");
-    setMessage("");
-    try {
-      const result = await api<{ profile: HuntingProfile; meta: SyncMeta }>(
-        `/hunting/profiles/${profileId}/capture/sync`,
-        {
-          method: "POST",
-          body: JSON.stringify({ captureBotUrl: captureBotUrl.trim(), status: "new" }),
-        }
-      );
-      setProfile(result.profile);
-      setMessage(
-        t("hunting.capture.syncResult", {
-          total: result.meta.total,
-          created: result.meta.created,
-          updated: result.meta.updated,
-        })
-      );
-      onSynced?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("common.error"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onImportFile(file: File) {
+  async function onUploadFile(file: File) {
     setBusy(true);
     setError("");
     setMessage("");
@@ -106,7 +39,7 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
           total: result.meta.total,
           created: result.meta.created,
           updated: result.meta.updated,
-        })
+        }),
       );
       onSynced?.();
     } catch (err) {
@@ -117,37 +50,62 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
     }
   }
 
-  const configured = Boolean(captureBotUrl.trim());
+  async function onDownload() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const headers = new Headers();
+      const token = getToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const res = await fetch(apiUrl(`/api/v1/hunting/fetch/export-csv`), {
+        headers,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let msg = t("common.error");
+        try {
+          const body = JSON.parse(text) as { error?: { message?: string } };
+          if (body.error?.message) msg = body.error.message;
+        } catch {
+          /* keep default */
+        }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename = match?.[1] || "jobs.csv";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage(t("hunting.capture.downloadDone"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common.error"));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <details className="hunting-sheet-panel" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary>{t("hunting.capture.heading")}</summary>
-      <p className="muted small">{t("hunting.capture.hint")}</p>
-      <form className="toolbar" onSubmit={(e) => void onSave(e)}>
-        <input
-          placeholder={t("hunting.capture.botUrl")}
-          value={captureBotUrl}
-          onChange={(e) => setCaptureBotUrl(e.target.value)}
-          aria-label={t("hunting.capture.botUrl")}
-        />
-        <button className="btn" type="submit" disabled={busy}>
-          {t("common.save")}
-        </button>
+    <div className="panel hunting-capture-io">
+      <header className="hunting-panel-head">
+        <h2>{t("hunting.capture.heading")}</h2>
+      </header>
+      <div className="toolbar">
         <button
           className="btn primary"
-          type="button"
-          disabled={busy || !configured}
-          onClick={() => void onSync()}
-        >
-          {t("hunting.capture.sync")}
-        </button>
-        <button
-          className="btn"
           type="button"
           disabled={busy}
           onClick={() => fileRef.current?.click()}
         >
-          {t("hunting.capture.importCsv")}
+          {t("hunting.capture.upload")}
+        </button>
+        <button className="btn" type="button" disabled={busy} onClick={() => void onDownload()}>
+          {t("hunting.capture.download")}
         </button>
         <input
           ref={fileRef}
@@ -156,17 +114,12 @@ export function HuntingCapturePanel({ profileId, onSynced }: Props) {
           hidden
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (file) void onImportFile(file);
+            if (file) void onUploadFile(file);
           }}
         />
-      </form>
-      {profile?.captureSyncedAt && (
-        <p className="muted small">
-          {t("hunting.capture.lastSync", { at: new Date(profile.captureSyncedAt).toLocaleString() })}
-        </p>
-      )}
+      </div>
       {message && <p className="muted small">{message}</p>}
       {error && <p className="form-error">{error}</p>}
-    </details>
+    </div>
   );
 }

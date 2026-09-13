@@ -17,7 +17,13 @@ import {
   webOrigin,
 } from "../integrations/oauthConfig.js";
 import { syncExternalCalendar } from "../integrations/calendarSyncExternal.js";
-import { addIcsFeed, syncAllIcsFeeds, syncIcsFeed } from "../integrations/icsSync.js";
+import {
+  addIcsFeed,
+  ensureAllIcsFeedHuntingProfiles,
+  ensureIcsFeedHuntingProfile,
+  syncAllIcsFeeds,
+  syncIcsFeed,
+} from "../integrations/icsSync.js";
 import { ensureUserForEmail } from "../ensureUser.js";
 
 export const integrationsRouter = Router();
@@ -67,6 +73,8 @@ async function completeShareAcceptOAuth(
 }
 
 integrationsRouter.get("/calendar", requireAuth, async (req, res) => {
+  await ensureAllIcsFeedHuntingProfiles(req.user!.id);
+
   const [rows, icsFeeds] = await Promise.all([
     prisma.calendarConnection.findMany({
       where: { userId: req.user!.id },
@@ -84,6 +92,7 @@ integrationsRouter.get("/calendar", requireAuth, async (req, res) => {
       where: { userId: req.user!.id },
       select: {
         id: true,
+        profileId: true,
         url: true,
         label: true,
         color: true,
@@ -136,6 +145,7 @@ integrationsRouter.post("/calendar/ics", requireAuth, async (req, res) => {
     return res.status(201).json({
       data: {
         id: result.feed.id,
+        profileId: result.feed.profileId,
         url: result.feed.url,
         label: result.feed.label,
         color: result.feed.color,
@@ -185,9 +195,22 @@ integrationsRouter.patch("/calendar/ics/:id", requireAuth, async (req, res) => {
       ...(parsed.data.color ? { color: parsed.data.color.toLowerCase() } : {}),
     },
   });
+  if (parsed.data.label) {
+    const profile = await ensureIcsFeedHuntingProfile(updated);
+    if (profile.name !== parsed.data.label) {
+      await prisma.huntingProfile.update({
+        where: { id: profile.id },
+        data: {
+          name: parsed.data.label,
+          sheetTabName: profile.sheetTabName?.trim() ? profile.sheetTabName : parsed.data.label,
+        },
+      });
+    }
+  }
   return res.json({
     data: {
       id: updated.id,
+      profileId: updated.profileId,
       url: updated.url,
       label: updated.label,
       color: updated.color,

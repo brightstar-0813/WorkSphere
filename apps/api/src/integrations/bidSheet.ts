@@ -74,6 +74,43 @@ export function formatApplicationDate(date = new Date()): string {
   return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
 }
 
+/** Parse sheet "Created Date" (M/D/YYYY, D/M/YYYY, YYYY-MM-DD, etc.) as local midnight. */
+export function parseSheetDate(raw?: string | null): Date | null {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    const y = Number(iso[1]);
+    const m = Number(iso[2]);
+    const d = Number(iso[3]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return new Date(y, m - 1, d, 0, 0, 0, 0);
+    }
+  }
+  const slash = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+  if (slash) {
+    let a = Number(slash[1]);
+    let b = Number(slash[2]);
+    let y = Number(slash[3]);
+    if (y < 100) y += 2000;
+    // Prefer M/D/Y (US sheet convention); if first part > 12 treat as D/M/Y.
+    let month = a;
+    let day = b;
+    if (a > 12 && b <= 12) {
+      day = a;
+      month = b;
+    }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return new Date(y, month - 1, day, 0, 0, 0, 0);
+    }
+  }
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) {
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 0, 0, 0, 0);
+  }
+  return null;
+}
+
 type SheetConfig = {
   spreadsheetUrl: string;
   sheetsWebAppUrl: string;
