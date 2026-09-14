@@ -1759,6 +1759,39 @@ a.user-chip.active {
   align-items: start;
 }
 
+.admin-hunting-cal {
+  margin: 0.85rem 0 1rem;
+}
+
+.admin-week-grid {
+  grid-template-rows: minmax(8.5rem, auto);
+}
+
+.admin-hunting-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.25rem;
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.admin-hunting-status-strip .admin-status-row {
+  margin: 0;
+  min-width: 8rem;
+}
+
+.cal-chip.src-hunting {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.cal-chip.src-ics {
+  background: color-mix(in srgb, var(--muted) 16%, var(--panel));
+}
+
 .admin-agenda-item {
   padding: 0.65rem 0;
   border-bottom: 1px solid var(--line);

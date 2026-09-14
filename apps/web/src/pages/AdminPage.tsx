@@ -264,6 +264,11 @@ export function AdminPage() {
   const [transactions, setTransactions] = useState<AdminTx[]>([]);
   const [huntingSubTab, setHuntingSubTab] = useState<HuntingSubTab>("bids");
   const [interviewStatusFilter, setInterviewStatusFilter] = useState("ALL");
+  const [schedulePeriodCounts, setSchedulePeriodCounts] = useState({
+    daily: 0,
+    weekly: 0,
+    monthly: 0,
+  });
   const [period, setPeriod] = useState<PeriodType>("weekly");
   const [anchorKey, setAnchorKey] = useState(() => toDateKey(new Date(), timeZone));
   const [filterUserId, setFilterUserId] = useState("");
@@ -385,13 +390,48 @@ export function AdminPage() {
   ]);
 
   useEffect(() => {
+    const anchor = parseDateKey(anchorKey, timeZone);
     if (period === "monthly") {
-      setCalCursor(startOfMonth(parseDateKey(anchorKey, timeZone)));
-      setSelectedDay(startOfDay(parseDateKey(anchorKey, timeZone)));
-    } else if (period === "daily") {
-      setSelectedDay(startOfDay(parseDateKey(anchorKey, timeZone)));
+      setCalCursor(startOfMonth(anchor));
+      setSelectedDay(startOfDay(anchor));
+    } else if (period === "weekly") {
+      setSelectedDay(startOfDay(anchor));
+    } else {
+      setSelectedDay(startOfDay(anchor));
     }
   }, [period, anchorKey, timeZone]);
+
+  useEffect(() => {
+    if (tab !== "hunting" || huntingSubTab !== "interviews") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const base = new URLSearchParams({ date: anchorKey });
+        if (filterUserId) base.set("userId", filterUserId);
+        if (interviewStatusFilter !== "ALL") base.set("status", interviewStatusFilter);
+        const counts = await Promise.all(
+          (["daily", "weekly", "monthly"] as const).map(async (mode) => {
+            const params = new URLSearchParams(base);
+            params.set("period", mode);
+            const rows = await api<AdminInterview[]>(`/admin/interviews?${params}`);
+            return rows.length;
+          }),
+        );
+        if (!cancelled) {
+          setSchedulePeriodCounts({
+            daily: counts[0] ?? 0,
+            weekly: counts[1] ?? 0,
+            monthly: counts[2] ?? 0,
+          });
+        }
+      } catch {
+        if (!cancelled) setSchedulePeriodCounts({ daily: 0, weekly: 0, monthly: 0 });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, huntingSubTab, anchorKey, filterUserId, interviewStatusFilter]);
 
   useEffect(() => {
     if (!detailUserId) {
@@ -436,9 +476,39 @@ export function AdminPage() {
     return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
   }, [calCursor]);
 
+  const weekCells = useMemo(() => {
+    const weekStart = startOfWeek(parseDateKey(anchorKey, timeZone));
+    return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  }, [anchorKey, timeZone]);
+
   const dayEvents = useMemo(
     () => events.filter((ev) => eventOccursOnDay(ev, selectedDay)),
-    [events, selectedDay]
+    [events, selectedDay],
+  );
+
+  const interviewStatusCounts = useMemo(() => {
+    const counts: Record<(typeof INTERVIEW_STATUSES)[number], number> = {
+      SCHEDULED: 0,
+      COMPLETED: 0,
+      CANCELLED: 0,
+      NO_SHOW: 0,
+    };
+    let timed = 0;
+    for (const iv of interviews) {
+      if (iv.status in counts) {
+        counts[iv.status as (typeof INTERVIEW_STATUSES)[number]] += 1;
+      }
+      if (iv.scheduledAt) timed += 1;
+    }
+    return { ...counts, timed, total: interviews.length };
+  }, [interviews]);
+
+  const dayInterviews = useMemo(
+    () =>
+      interviews.filter(
+        (iv) => iv.scheduledAt && sameDay(new Date(iv.scheduledAt), selectedDay),
+      ),
+    [interviews, selectedDay],
   );
 
   const emptyAmount = t("reports.noAmount");
@@ -1702,18 +1772,6 @@ export function AdminPage() {
                 </select>
               </label>
             )}
-            <div className="cal-views" role="group" aria-label={t("admin.periodLabel")}>
-              {PERIODS.map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`btn${period === mode ? " primary" : " ghost"}`}
-                  onClick={() => setPeriod(mode)}
-                >
-                  {t(`reports.period.${mode}`)}
-                </button>
-              ))}
-            </div>
             <button
               type="button"
               className="btn"
@@ -1768,50 +1826,225 @@ export function AdminPage() {
 
           {huntingSubTab === "interviews" && (
             <>
-              {interviews.length === 0 && <p className="muted">{t("common.empty")}</p>}
-              <div className="admin-table-wrap">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>{t("common.company")}</th>
-                      <th>{t("common.role")}</th>
-                      <th>{t("hunting.profile.label")}</th>
-                      <th>{t("admin.owner")}</th>
-                      <th>{t("common.status")}</th>
-                      <th>{t("admin.scheduledAt")}</th>
-                      <th>{t("common.notes")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {interviews.map((iv) => (
-                      <tr key={iv.id}>
-                        <td>
-                          <strong>{iv.company}</strong>
-                        </td>
-                        <td>{iv.roleTitle}</td>
-                        <td>{iv.profile?.name ?? "—"}</td>
-                        <td>
-                          {iv.user.name}
-                          <p className="muted small">{iv.user.email}</p>
-                        </td>
-                        <td>
-                          <StatusBadge tone={statusTone(iv.status)}>
-                            {t(`hunting.interviews.status.${iv.status}`, {
-                              defaultValue: iv.status,
-                            })}
-                          </StatusBadge>
-                        </td>
-                        <td className="tabular">
-                          {iv.scheduledAt ? fmt(iv.scheduledAt) : "—"}
-                        </td>
-                        <td className="muted small">
-                          {iv.source === "ICS" ? "—" : iv.notes || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="hunting-kpi" role="group" aria-label={t("admin.scheduleAmounts")}>
+                {PERIODS.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`hunting-kpi-card${period === mode ? " active" : ""}`}
+                    onClick={() => setPeriod(mode)}
+                  >
+                    <span className="hunting-kpi-label">{t(`reports.period.${mode}`)}</span>
+                    <strong className="tabular">{schedulePeriodCounts[mode]}</strong>
+                    <span className="muted small">{t("admin.schedulesCount")}</span>
+                  </button>
+                ))}
+                <article className="hunting-kpi-card" aria-live="polite">
+                  <span className="hunting-kpi-label">{t("admin.periodSchedules")}</span>
+                  <strong className="tabular">{interviewStatusCounts.total}</strong>
+                  <span className="muted small">
+                    {t("admin.timedSchedules", { count: interviewStatusCounts.timed })}
+                  </span>
+                </article>
               </div>
+
+              <div className="admin-status-list admin-hunting-status-strip">
+                {INTERVIEW_STATUSES.map((s) => (
+                  <div key={s} className="admin-status-row">
+                    <StatusBadge tone={statusTone(s)}>
+                      {t(`hunting.interviews.status.${s}`, { defaultValue: s })}
+                    </StatusBadge>
+                    <strong className="tabular">{interviewStatusCounts[s]}</strong>
+                  </div>
+                ))}
+              </div>
+
+              {(period === "weekly" || period === "monthly") && (
+                <div className="admin-cal-layout admin-hunting-cal">
+                  <div className="panel cal-main">
+                    <div className="cal-weekdays">
+                      {Array.from({ length: 7 }, (_, i) => (
+                        <div key={i} className="cal-weekday">
+                          {addDays(startOfWeek(new Date()), i).toLocaleDateString(i18n.language, {
+                            weekday: "short",
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                    <div
+                      className={
+                        period === "monthly" ? "cal-month-grid" : "cal-month-grid admin-week-grid"
+                      }
+                    >
+                      {(period === "monthly" ? monthCells : weekCells).map((day) => {
+                        const inMonth =
+                          period === "weekly" || day.getMonth() === calCursor.getMonth();
+                        const dayIvs = interviews.filter(
+                          (iv) =>
+                            iv.scheduledAt && sameDay(new Date(iv.scheduledAt), day),
+                        );
+                        return (
+                          <button
+                            key={day.toISOString()}
+                            type="button"
+                            className={`cal-cell${inMonth ? "" : " muted-month"}${
+                              sameDay(day, selectedDay) ? " selected" : ""
+                            }${sameDay(day, new Date()) ? " today" : ""}`}
+                            onClick={() => setSelectedDay(startOfDay(day))}
+                          >
+                            <span className="cal-date">{day.getDate()}</span>
+                            <div className="cal-chips">
+                              {dayIvs.slice(0, 3).map((iv) => (
+                                <span
+                                  key={iv.id}
+                                  className={`cal-chip src-hunting${
+                                    iv.source === "ICS" ? " src-ics" : ""
+                                  }`}
+                                  title={`${iv.user.name}: ${iv.company} — ${iv.roleTitle}`}
+                                >
+                                  {iv.company}
+                                </span>
+                              ))}
+                              {dayIvs.length > 3 && (
+                                <span className="cal-more">+{dayIvs.length - 3}</span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <aside className="panel cal-agenda">
+                    <h3>
+                      {selectedDay.toLocaleDateString(i18n.language, {
+                        weekday: "long",
+                        month: "long",
+                        day: "numeric",
+                      })}
+                    </h3>
+                    {dayInterviews.length === 0 ? (
+                      <p className="muted">{t("admin.noSchedulesDay")}</p>
+                    ) : (
+                      <div className="list">
+                        {dayInterviews.map((iv) => (
+                          <article key={iv.id} className="admin-agenda-item">
+                            <strong>{iv.company}</strong>
+                            <p className="muted small">
+                              {iv.roleTitle}
+                              {iv.profile?.name ? ` · ${iv.profile.name}` : ""}
+                            </p>
+                            <p className="muted small">
+                              {iv.user.name} · {iv.user.email}
+                            </p>
+                            <div className="row-actions">
+                              <StatusBadge tone={statusTone(iv.status)}>
+                                {t(`hunting.interviews.status.${iv.status}`, {
+                                  defaultValue: iv.status,
+                                })}
+                              </StatusBadge>
+                              {iv.scheduledAt && (
+                                <time className="muted small tabular">{fmt(iv.scheduledAt)}</time>
+                              )}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </aside>
+                </div>
+              )}
+
+              {period === "daily" && (
+                <article className="panel">
+                  <h3>
+                    {selectedDay.toLocaleDateString(i18n.language, {
+                      weekday: "long",
+                      month: "long",
+                      day: "numeric",
+                    })}
+                  </h3>
+                  {dayInterviews.length === 0 ? (
+                    <p className="muted">{t("admin.noSchedulesDay")}</p>
+                  ) : (
+                    <div className="list">
+                      {dayInterviews.map((iv) => (
+                        <article key={iv.id} className="admin-agenda-item">
+                          <strong>{iv.company}</strong>
+                          <p className="muted small">
+                            {iv.roleTitle}
+                            {iv.profile?.name ? ` · ${iv.profile.name}` : ""}
+                          </p>
+                          <p className="muted small">
+                            {iv.user.name} · {iv.user.email}
+                          </p>
+                          <div className="row-actions">
+                            <StatusBadge tone={statusTone(iv.status)}>
+                              {t(`hunting.interviews.status.${iv.status}`, {
+                                defaultValue: iv.status,
+                              })}
+                            </StatusBadge>
+                            {iv.scheduledAt && (
+                              <time className="muted small tabular">{fmt(iv.scheduledAt)}</time>
+                            )}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              )}
+
+              <article className="panel">
+                <h3>{t("admin.scheduleList")}</h3>
+                {interviews.length === 0 ? (
+                  <p className="muted">{t("common.empty")}</p>
+                ) : (
+                  <div className="admin-table-wrap">
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>{t("common.company")}</th>
+                          <th>{t("common.role")}</th>
+                          <th>{t("hunting.profile.label")}</th>
+                          <th>{t("admin.owner")}</th>
+                          <th>{t("common.status")}</th>
+                          <th>{t("admin.scheduledAt")}</th>
+                          <th>{t("common.notes")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {interviews.map((iv) => (
+                          <tr key={iv.id}>
+                            <td>
+                              <strong>{iv.company}</strong>
+                            </td>
+                            <td>{iv.roleTitle}</td>
+                            <td>{iv.profile?.name ?? "—"}</td>
+                            <td>
+                              {iv.user.name}
+                              <p className="muted small">{iv.user.email}</p>
+                            </td>
+                            <td>
+                              <StatusBadge tone={statusTone(iv.status)}>
+                                {t(`hunting.interviews.status.${iv.status}`, {
+                                  defaultValue: iv.status,
+                                })}
+                              </StatusBadge>
+                            </td>
+                            <td className="tabular">
+                              {iv.scheduledAt ? fmt(iv.scheduledAt) : "—"}
+                            </td>
+                            <td className="muted small">
+                              {iv.source === "ICS" ? "—" : iv.notes || "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </article>
             </>
           )}
         </div>
