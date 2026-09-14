@@ -685,7 +685,13 @@
     "toastEditedTitle": "Канал обновлён",
     "toastEditedBody": "«{{name}}» сохранён.",
     "editMessage": "Изменить",
-    "edited": "изменено"
+    "edited": "изменено",
+    "insertEmoji": "Вставить эмодзи",
+    "emojiPicker": "Выбор эмодзи",
+    "quickReactions": "Быстрые реакции",
+    "allEmojis": "Все эмодзи",
+    "addReaction": "Добавить реакцию",
+    "reactWith": "Отреагировать {{emoji}}"
   },
   "reports": {
     "heading": "Отчёты",

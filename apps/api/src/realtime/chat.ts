@@ -64,6 +64,7 @@ export type ChatNotifyPayload = {
   createdAt: Date | string;
   editedAt?: Date | string | null;
   author: { id: string; name: string; avatarUrl?: string | null };
+  reactions?: Array<{ emoji: string; count: number; reactedByMe: boolean }>;
 };
 
 export function broadcastChatMessage(message: ChatNotifyPayload) {
@@ -76,6 +77,7 @@ export function broadcastChatMessage(message: ChatNotifyPayload) {
         ? message.editedAt
         : message.editedAt.toISOString()
       : null,
+    reactions: message.reactions ?? [],
   };
   io?.to(roomChannel(message.roomId)).emit("message:new", {
     id: payload.id,
@@ -84,6 +86,7 @@ export function broadcastChatMessage(message: ChatNotifyPayload) {
     createdAt: payload.createdAt,
     editedAt: payload.editedAt,
     author: payload.author,
+    reactions: payload.reactions,
   });
   // All authenticated sockets — powers in-app chat toasts even outside the room.
   io?.emit("chat:notify", payload);
@@ -96,6 +99,7 @@ export function broadcastMessageUpdated(message: {
   createdAt: Date | string;
   editedAt?: Date | string | null;
   author: { id: string; name: string; avatarUrl?: string | null };
+  reactions?: Array<{ emoji: string; count: number; reactedByMe: boolean }>;
 }) {
   const payload = {
     ...message,
@@ -106,8 +110,22 @@ export function broadcastMessageUpdated(message: {
         ? message.editedAt
         : message.editedAt.toISOString()
       : null,
+    reactions: message.reactions,
   };
   io?.to(roomChannel(message.roomId)).emit("message:updated", payload);
+}
+
+/** Broadcast raw reaction rows so each client can recompute reactedByMe for themselves. */
+export function broadcastMessageReaction(payload: {
+  messageId: string;
+  roomId: string;
+  reactions: Array<{ emoji: string; userId: string }>;
+}) {
+  io?.to(roomChannel(payload.roomId)).emit("message:reaction", {
+    messageId: payload.messageId,
+    roomId: payload.roomId,
+    reactions: payload.reactions,
+  });
 }
 
 export function broadcastRoomUpdated(room: {
@@ -303,6 +321,7 @@ export function attachChatRealtime(httpServer: HttpServer) {
           createdAt: message.createdAt.toISOString(),
           editedAt: message.editedAt ? message.editedAt.toISOString() : null,
           author: message.author,
+          reactions: [] as Array<{ emoji: string; count: number; reactedByMe: boolean }>,
         };
         broadcastChatMessage(dto);
         ack?.({
@@ -314,6 +333,7 @@ export function attachChatRealtime(httpServer: HttpServer) {
             createdAt: dto.createdAt,
             editedAt: dto.editedAt,
             author: dto.author,
+            reactions: dto.reactions,
           },
         });
       } catch (err) {

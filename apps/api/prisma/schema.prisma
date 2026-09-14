@@ -124,6 +124,7 @@ model User {
   chatRoomsCreated ChatRoom[]
   chatMessages     ChatMessage[]
   chatRoomUnlocks  ChatRoomUnlock[]
+  chatMessageReactions ChatMessageReaction[]
   jobDayLogs    JobDayLog[]
   calendarConnections CalendarConnection[]
   calendarIcsFeeds    CalendarIcsFeed[]
@@ -538,9 +539,27 @@ model ChatMessage {
   updatedAt DateTime  @updatedAt
   editedAt  DateTime?
 
-  room   ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  author User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  room      ChatRoom             @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  author    User                 @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  reactions ChatMessageReaction[]
 
   @@index([roomId, createdAt])
   @@index([authorId])
+}
+
+/** Per-user emoji reaction on a chat message (Slack/Teams-style toggle). */
+model ChatMessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  /** Unicode emoji grapheme (allowlisted in API). */
+  emoji     String   @db.VarChar(16)
+  createdAt DateTime @default(now())
+
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
 }

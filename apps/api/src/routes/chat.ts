@@ -4,7 +4,13 @@ import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { requireAuth } from "../auth.js";
 import {
+  aggregateReactions,
+  isAllowedChatEmoji,
+  type ReactionAgg,
+} from "../chatEmoji.js";
+import {
   broadcastChatMessage,
+  broadcastMessageReaction,
   broadcastMessageUpdated,
   broadcastRoomCleared,
   broadcastRoomDeleted,
@@ -54,6 +60,54 @@ async function userHasRoomAccess(
 }
 
 const authorSelect = { id: true, name: true, avatarUrl: true } as const;
+
+type MessageRow = {
+  id: string;
+  roomId: string;
+  body: string;
+  createdAt: Date;
+  editedAt: Date | null;
+  author: { id: string; name: string; avatarUrl: string | null };
+};
+
+function mapMessageDto(message: MessageRow, reactions: ReactionAgg[] = []) {
+  return {
+    id: message.id,
+    roomId: message.roomId,
+    body: message.body,
+    createdAt: message.createdAt,
+    editedAt: message.editedAt,
+    author: message.author,
+    reactions,
+  };
+}
+
+async function reactionsForMessages(messageIds: string[], viewerId: string) {
+  if (messageIds.length === 0) return new Map<string, ReactionAgg[]>();
+  const rows = await prisma.chatMessageReaction.findMany({
+    where: { messageId: { in: messageIds } },
+    select: { messageId: true, emoji: true, userId: true },
+  });
+  const byMessage = new Map<string, Array<{ emoji: string; userId: string }>>();
+  for (const row of rows) {
+    const list = byMessage.get(row.messageId) ?? [];
+    list.push({ emoji: row.emoji, userId: row.userId });
+    byMessage.set(row.messageId, list);
+  }
+  const out = new Map<string, ReactionAgg[]>();
+  for (const id of messageIds) {
+    out.set(id, aggregateReactions(byMessage.get(id) ?? [], viewerId));
+  }
+  return out;
+}
+
+async function loadMessageReactions(messageId: string, viewerId: string) {
+  const rows = await prisma.chatMessageReaction.findMany({
+    where: { messageId },
+    select: { emoji: true, userId: true },
+  });
+  return aggregateReactions(rows, viewerId);
+}
 
 const roomInclude = {
   createdBy: { select: { id: true, name: true } },
@@ -398,8 +452,13 @@ chatRouter.get("/rooms/:id/messages", async (req, res) => {
   const page = hasMore ? rows.slice(0, limit) : rows;
   page.reverse();
 
+  const reactionMap = await reactionsForMessages(
+    page.map((m) => m.id),
+    req.user!.id,
+  );
+
   return res.json({
-    data: page,
+    data: page.map((m) => mapMessageDto(m, reactionMap.get(m.id) ?? [])),
     meta: {
       page: 1,
       pageSize: limit,
@@ -440,6 +499,7 @@ chatRouter.post("/rooms/:id/messages", async (req, res) => {
     data: { updatedAt: new Date() },
   });
 
+  const dto = mapMessageDto(data, []);
   broadcastChatMessage({
     id: data.id,
     roomId: data.roomId,
@@ -448,9 +508,10 @@ chatRouter.post("/rooms/:id/messages", async (req, res) => {
     createdAt: data.createdAt,
     editedAt: data.editedAt,
     author: data.author,
+    reactions: [],
   });
 
-  return res.status(201).json({ data });
+  return res.status(201).json({ data: dto });
 });
 
 chatRouter.patch("/rooms/:roomId/messages/:messageId", async (req, res) => {
@@ -484,6 +545,9 @@ chatRouter.patch("/rooms/:roomId/messages/:messageId", async (req, res) => {
     include: { author: { select: authorSelect } },
   });
 
+  const reactions = await loadMessageReactions(data.id, req.user!.id);
+  const dto = mapMessageDto(data, reactions);
+
   broadcastMessageUpdated({
     id: data.id,
     roomId: data.roomId,
@@ -491,7 +555,78 @@ chatRouter.patch("/rooms/:roomId/messages/:messageId", async (req, res) => {
     createdAt: data.createdAt,
     editedAt: data.editedAt,
     author: data.author,
+    reactions,
   });
 
-  return res.json({ data });
+  return res.json({ data: dto });
+});
+
+chatRouter.post("/rooms/:roomId/messages/:messageId/reactions", async (req, res) => {
+  const room = await prisma.chatRoom.findUnique({ where: { id: req.params.roomId } });
+  if (!room) {
+    return res.status(404).json({ error: { code: "NOT_FOUND", message: "Channel not found" } });
+  }
+  if (!(await userHasRoomAccess(req.user!, room))) {
+    return res.status(403).json({ error: { code: "LOCKED", message: "Password required" } });
+  }
+
+  const schema = z.object({ emoji: z.string().trim().min(1).max(16) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success || !isAllowedChatEmoji(parsed.data.emoji)) {
+    return res.status(400).json({
+      error: { code: "VALIDATION", message: "Unsupported emoji reaction" },
+    });
+  }
+
+  const message = await prisma.chatMessage.findUnique({
+    where: { id: req.params.messageId },
+    select: { id: true, roomId: true },
+  });
+  if (!message || message.roomId !== room.id) {
+    return res.status(404).json({ error: { code: "NOT_FOUND", message: "Message not found" } });
+  }
+
+  const emoji = parsed.data.emoji.trim();
+  const existing = await prisma.chatMessageReaction.findUnique({
+    where: {
+      messageId_userId_emoji: {
+        messageId: message.id,
+        userId: req.user!.id,
+        emoji,
+      },
+    },
+  });
+
+  if (existing) {
+    await prisma.chatMessageReaction.delete({ where: { id: existing.id } });
+  } else {
+    await prisma.chatMessageReaction.create({
+      data: {
+        messageId: message.id,
+        userId: req.user!.id,
+        emoji,
+      },
+    });
+  }
+
+  // Aggregate for the acting user; clients merge reactedByMe from their own viewer id.
+  const rows = await prisma.chatMessageReaction.findMany({
+    where: { messageId: message.id },
+    select: { emoji: true, userId: true },
+  });
+  const reactions = aggregateReactions(rows, req.user!.id);
+
+  broadcastMessageReaction({
+    messageId: message.id,
+    roomId: room.id,
+    reactions: rows,
+  });
+
+  return res.json({
+    data: {
+      messageId: message.id,
+      roomId: room.id,
+      reactions,
+    },
+  });
 });

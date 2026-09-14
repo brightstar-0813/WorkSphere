@@ -1,6 +1,8 @@
 import { io, type Socket } from "socket.io-client";
 import { API_BASE } from "./config";
 import { api, getToken } from "./api";
+import type { ChatReaction } from "./lib/chatEmoji";
+import { aggregateReactionsForViewer } from "./lib/chatEmoji";
 
 export type ChatAuthor = {
   id: string;
@@ -15,6 +17,13 @@ export type ChatMessage = {
   createdAt: string;
   editedAt?: string | null;
   author: ChatAuthor;
+  reactions?: ChatReaction[];
+};
+
+export type ChatReactionEvent = {
+  messageId: string;
+  roomId: string;
+  reactions: Array<{ emoji: string; userId: string }>;
 };
 
 export type ChatNotifyPayload = ChatMessage & {
@@ -227,4 +236,34 @@ export async function sendChatMessage(roomId: string, body: string): Promise<Ack
 export function emitTyping(roomId: string, typing: boolean) {
   if (!socket?.connected || !joinedRooms.has(roomId)) return;
   socket.emit("typing", { roomId, typing });
+}
+
+export async function toggleChatReaction(
+  roomId: string,
+  messageId: string,
+  emoji: string,
+): Promise<AckResult<{ messageId: string; roomId: string; reactions: ChatReaction[] }>> {
+  try {
+    const data = await api<{ messageId: string; roomId: string; reactions: ChatReaction[] }>(
+      `/chat/rooms/${roomId}/messages/${messageId}/reactions`,
+      {
+        method: "POST",
+        body: JSON.stringify({ emoji }),
+      },
+    );
+    return { ok: true, data };
+  } catch (e) {
+    const err = e as Error & { code?: string; message?: string };
+    if (err?.code === "LOCKED" || err?.message === "Password required") {
+      return { ok: false, error: "LOCKED" };
+    }
+    return { ok: false, error: e instanceof Error ? e.message : "FAILED" };
+  }
+}
+
+export function reactionsFromEvent(
+  event: ChatReactionEvent,
+  viewerId: string,
+): ChatReaction[] {
+  return aggregateReactionsForViewer(event.reactions, viewerId);
 }

@@ -708,7 +708,13 @@
     "toastEditedTitle": "Channel updated",
     "toastEditedBody": "“{{name}}” was saved.",
     "editMessage": "Edit",
-    "edited": "edited"
+    "edited": "edited",
+    "insertEmoji": "Insert emoji",
+    "emojiPicker": "Emoji picker",
+    "quickReactions": "Quick reactions",
+    "allEmojis": "All emojis",
+    "addReaction": "Add reaction",
+    "reactWith": "React with {{emoji}}"
   },
   "reports": {
     "heading": "Reports",

@@ -685,7 +685,13 @@
     "toastEditedTitle": "频道已更新",
     "toastEditedBody": "已保存“{{name}}”。",
     "editMessage": "编辑",
-    "edited": "已编辑"
+    "edited": "已编辑",
+    "insertEmoji": "插入表情",
+    "emojiPicker": "表情选择器",
+    "quickReactions": "快捷回应",
+    "allEmojis": "全部表情",
+    "addReaction": "添加回应",
+    "reactWith": "用 {{emoji}} 回应"
   },
   "reports": {
     "heading": "报表",

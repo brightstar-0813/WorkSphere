@@ -13,16 +13,21 @@ import { mediaUrl } from "../config";
 import {
   ChatMessage,
   ChatPresenceUser,
+  ChatReactionEvent,
   connectChatSocket,
   emitTyping,
   joinChannel,
   leaveChannel,
+  reactionsFromEvent,
   sendChatMessage,
   setActiveDiscussRoom,
+  toggleChatReaction,
 } from "../chat";
 import { useAlerts } from "../alerts/AlertProvider";
 import { AlertBanner } from "../components/AlertBanner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { EmojiPicker } from "../components/EmojiPicker";
+import { CHAT_QUICK_EMOJIS, insertAtCursor } from "../lib/chatEmoji";
 import { useSearchParams } from "react-router-dom";
 
 type ChatRoom = {
@@ -85,6 +90,10 @@ function sameDay(a: string, b: string) {
   );
 }
 
+function withReactions(msg: ChatMessage): ChatMessage {
+  return { ...msg, reactions: msg.reactions ?? [] };
+}
+
 function isLockedError(err: unknown) {
   if (typeof err !== "object" || err === null) return false;
   const e = err as { code?: string; message?: string; status?: number };
@@ -120,6 +129,8 @@ export function DiscussPage() {
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingBody, setEditingBody] = useState("");
+  const [composerEmojiOpen, setComposerEmojiOpen] = useState(false);
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const [presence, setPresence] = useState<ChatPresenceUser[]>([]);
   const [typingNames, setTypingNames] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
@@ -129,6 +140,7 @@ export function DiscussPage() {
 
   const scrollerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const composerInputRef = useRef<HTMLInputElement>(null);
   const stickBottomRef = useRef(true);
   const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingIdleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -224,6 +236,8 @@ export function DiscussPage() {
     setEditChannelOpen(false);
     setUnlockPassword("");
     setEditingMessageId(null);
+    setComposerEmojiOpen(false);
+    setReactionPickerFor(null);
   }, [activeId]);
 
   useEffect(() => {
@@ -262,7 +276,9 @@ export function DiscussPage() {
         );
         return;
       }
-      setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      setMessages((prev) =>
+        prev.some((m) => m.id === msg.id) ? prev : [...prev, withReactions(msg)],
+      );
       if (!stickBottomRef.current && msg.author.id !== userIdRef.current) {
         setUnseenCount((n) => n + 1);
       }
@@ -285,7 +301,16 @@ export function DiscussPage() {
     };
     const onMessageUpdated = (msg: ChatMessage) => {
       setMessages((prev) =>
-        prev.map((m) => (m.id === msg.id ? { ...m, body: msg.body, editedAt: msg.editedAt } : m)),
+        prev.map((m) =>
+          m.id === msg.id
+            ? {
+                ...m,
+                body: msg.body,
+                editedAt: msg.editedAt,
+                reactions: msg.reactions ?? m.reactions ?? [],
+              }
+            : m,
+        ),
       );
       setRooms((prev) =>
         prev.map((r) =>
@@ -293,6 +318,14 @@ export function DiscussPage() {
             ? { ...r, lastMessage: { ...r.lastMessage, body: msg.body } }
             : r,
         ),
+      );
+    };
+    const onMessageReaction = (payload: ChatReactionEvent) => {
+      if (payload.roomId !== activeIdRef.current) return;
+      const viewerId = userIdRef.current ?? "";
+      const reactions = reactionsFromEvent(payload, viewerId);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === payload.messageId ? { ...m, reactions } : m)),
       );
     };
     const onPresence = (payload: { roomId: string; users: ChatPresenceUser[] }) => {
@@ -374,6 +407,7 @@ export function DiscussPage() {
     socket.on("disconnect", onDisconnect);
     socket.on("message:new", onMessage);
     socket.on("message:updated", onMessageUpdated);
+    socket.on("message:reaction", onMessageReaction);
     socket.on("presence:update", onPresence);
     socket.on("typing", onTyping);
     socket.on("room:cleared", onCleared);
@@ -387,6 +421,7 @@ export function DiscussPage() {
       socket.off("disconnect", onDisconnect);
       socket.off("message:new", onMessage);
       socket.off("message:updated", onMessageUpdated);
+      socket.off("message:reaction", onMessageReaction);
       socket.off("presence:update", onPresence);
       socket.off("typing", onTyping);
       socket.off("room:cleared", onCleared);
@@ -429,7 +464,7 @@ export function DiscussPage() {
       try {
         const { data, meta } = await apiList<ChatMessage[]>(`/chat/rooms/${roomId}/messages?limit=50`);
         if (cancelled) return;
-        setMessages(data);
+        setMessages(data.map(withReactions));
         setHasMore(Boolean(meta.hasMore));
 
         const join = await joinChannel(roomId);
@@ -499,7 +534,7 @@ export function DiscussPage() {
       stickBottomRef.current = false;
       setMessages((prev) => {
         const ids = new Set(prev.map((m) => m.id));
-        return [...data.filter((m) => !ids.has(m.id)), ...prev];
+        return [...data.map(withReactions).filter((m) => !ids.has(m.id)), ...prev];
       });
       setHasMore(Boolean(meta.hasMore));
       requestAnimationFrame(() => {
@@ -732,8 +767,46 @@ export function DiscussPage() {
     stickBottomRef.current = true;
     setAtBottom(true);
     setUnseenCount(0);
-    setMessages((prev) => (prev.some((m) => m.id === result.data.id) ? prev : [...prev, result.data]));
+    setMessages((prev) =>
+      prev.some((m) => m.id === result.data.id) ? prev : [...prev, withReactions(result.data)],
+    );
     requestAnimationFrame(() => scrollElToEnd("smooth"));
+  }
+
+  function insertComposerEmoji(emoji: string) {
+    const input = composerInputRef.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? draft.length;
+    const next = insertAtCursor(draft, emoji, start, end, 4000);
+    setDraft(next.value);
+    requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange(next.caret, next.caret);
+    });
+    if (activeId) {
+      emitTyping(activeId, true);
+      if (typingIdleRef.current) clearTimeout(typingIdleRef.current);
+      typingIdleRef.current = setTimeout(() => {
+        if (activeId) emitTyping(activeId, false);
+      }, 1200);
+    }
+  }
+
+  async function onToggleReaction(messageId: string, emoji: string) {
+    if (!activeId || needsUnlock) return;
+    setReactionPickerFor(null);
+    const result = await toggleChatReaction(activeId, messageId, emoji);
+    if (!result.ok) {
+      if (result.error === "LOCKED") {
+        lockActiveRoom(activeId);
+        return;
+      }
+      setError(result.error || t("discuss.error"));
+      return;
+    }
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, reactions: result.data.reactions } : m)),
+    );
   }
 
   function startEditMessage(msg: ChatMessage) {
@@ -1154,6 +1227,55 @@ export function DiscussPage() {
                                         </button>
                                       )}
                                     </div>
+                                    <div className="discuss-reactions">
+                                      {(msg.reactions ?? []).map((r) => (
+                                        <button
+                                          key={r.emoji}
+                                          type="button"
+                                          className={`discuss-reaction-chip ${r.reactedByMe ? "mine" : ""}`}
+                                          aria-pressed={r.reactedByMe}
+                                          aria-label={t("discuss.reactWith", { emoji: r.emoji })}
+                                          onClick={() => void onToggleReaction(msg.id, r.emoji)}
+                                        >
+                                          <span aria-hidden>{r.emoji}</span>
+                                          <span>{r.count}</span>
+                                        </button>
+                                      ))}
+                                      <div className="discuss-reaction-add-wrap">
+                                        <button
+                                          type="button"
+                                          className="discuss-reaction-add"
+                                          aria-label={t("discuss.addReaction")}
+                                          aria-expanded={reactionPickerFor === msg.id}
+                                          onClick={() =>
+                                            setReactionPickerFor((id) =>
+                                              id === msg.id ? null : msg.id,
+                                            )
+                                          }
+                                        >
+                                          <span aria-hidden>+</span>
+                                        </button>
+                                        <EmojiPicker
+                                          open={reactionPickerFor === msg.id}
+                                          placement="above"
+                                          onClose={() => setReactionPickerFor(null)}
+                                          onPick={(emoji) => void onToggleReaction(msg.id, emoji)}
+                                        />
+                                      </div>
+                                      <div className="discuss-reaction-quick" aria-hidden={reactionPickerFor === msg.id}>
+                                        {CHAT_QUICK_EMOJIS.slice(0, 4).map((emoji) => (
+                                          <button
+                                            key={`${msg.id}-q-${emoji}`}
+                                            type="button"
+                                            className="discuss-reaction-quick-btn"
+                                            aria-label={t("discuss.reactWith", { emoji })}
+                                            onClick={() => void onToggleReaction(msg.id, emoji)}
+                                          >
+                                            {emoji}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
                                   </>
                                 )}
                               </div>
@@ -1184,7 +1306,28 @@ export function DiscussPage() {
                   </div>
 
                   <form className="discuss-composer" onSubmit={(e) => void onSend(e)}>
+                    <div className="discuss-composer-emoji-wrap">
+                      <button
+                        type="button"
+                        className="discuss-composer-emoji"
+                        aria-label={t("discuss.insertEmoji")}
+                        aria-expanded={composerEmojiOpen}
+                        onClick={() => {
+                          setReactionPickerFor(null);
+                          setComposerEmojiOpen((v) => !v);
+                        }}
+                      >
+                        <span aria-hidden>😊</span>
+                      </button>
+                      <EmojiPicker
+                        open={composerEmojiOpen}
+                        placement="above"
+                        onClose={() => setComposerEmojiOpen(false)}
+                        onPick={insertComposerEmoji}
+                      />
+                    </div>
                     <input
+                      ref={composerInputRef}
                       value={draft}
                       onChange={(e) => onDraftChange(e.target.value)}
                       placeholder={t("discuss.placeholder")}
