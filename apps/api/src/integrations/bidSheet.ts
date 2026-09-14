@@ -195,7 +195,21 @@ export async function fetchSheetJobRows(config: SheetConfig): Promise<SheetJobRo
     spreadsheetId,
   }));
 
-  // Fallback for older Apps Script deployments without listRows
+  // Older Apps Script treated unknown actions as append — that wrote blank Ready rows.
+  // Never treat an append-shaped response as a successful list.
+  if (
+    !Array.isArray(parsed.rows) &&
+    (parsed.duplicate === true ||
+      parsed.duplicate === false ||
+      parsed.appended === true ||
+      parsed.updated === true)
+  ) {
+    throw new Error(
+      "Apps Script web app is missing listRows (redeploy apps-script/Code.gs from Brightstar Bid bot). Sync was aborted so blank Ready rows are not appended."
+    );
+  }
+
+  // Fallback for older Apps Script deployments that return listLinks-only payloads
   if (!Array.isArray(parsed.rows)) {
     const legacy = await postSheetWebApp(config.sheetsWebAppUrl, sheetPayload(config, {
       action: "listLinks",
