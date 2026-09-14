@@ -68,6 +68,7 @@ export function sheetStatusLooksReady(status: string): boolean {
 
 /**
  * Real job rows need a title, company, or link.
+ * JD / listing link is optional — many recruiter-direct roles have none.
  * Status-only placeholders (blank rows pre-filled with "Ready") must not sync.
  */
 export function isMeaningfulSheetJobRow(
@@ -86,7 +87,7 @@ export function isMeaningfulSheetJobRow(
   // Mis-mapped status text in the title column is not a job.
   if (!company && /^(ready|saved|new|applied)$/i.test(title)) return false;
 
-  // Require at least one non-placeholder identity field.
+  // Title and/or company are enough even with an empty Link / JD column.
   if (title && !/^(untitled role|untitled)$/i.test(title)) return true;
   if (company && !/^unknown$/i.test(company)) return true;
   if (salary && (title || company)) return true;

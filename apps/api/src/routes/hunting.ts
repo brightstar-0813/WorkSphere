@@ -38,7 +38,8 @@ import { ensureAllIcsFeedHuntingProfiles } from "../integrations/icsSync.js";
 export const huntingRouter = Router();
 huntingRouter.use(requireAuth);
 
-const optionalUrl = z.union([z.string().url(), z.literal(""), z.null()]).optional();
+/** Listing URL is optional — recruiter-direct roles often have no public JD link. */
+const optionalUrl = z.union([z.string().max(2048), z.literal(""), z.null()]).optional();
 
 const profileBody = z.object({
   name: z.string().min(1).optional(),
@@ -278,12 +279,17 @@ huntingRouter.post("/profiles/:id/sheet/sync", async (req, res) => {
         continue;
       }
 
-      const sheetKey = normalizeJobLink(row.link) || `row:${row.row ?? row.title}:${row.company}`;
+      // Prefer link when present; otherwise key by sheet row so linkless recruiter jobs still sync.
+      const sheetKey =
+        normalizeJobLink(row.link) ||
+        (row.row != null
+          ? `row:${row.row}`
+          : `row:${row.title}:${row.company}:${row.salary}`);
       const roleTitle = row.title || "Untitled role";
       const company = row.company || "Unknown";
-      const sourceUrl = row.link || null;
+      const sourceUrl = row.link.trim() ? row.link.trim() : null;
 
-      // Never create Untitled/Unknown rows without a real link.
+      // Skip blank Ready placeholders only — missing JD link alone is fine.
       if (!sourceUrl && roleTitle === "Untitled role" && company === "Unknown") {
         rowsSkipped += 1;
         continue;
@@ -468,7 +474,7 @@ huntingRouter.post("/profiles/:id/capture/import-csv", async (req, res) => {
     return res.status(400).json({
       error: {
         code: "VALIDATION",
-        message: "Body must include csv text with columns: title, company, link, salary, jd.",
+        message: "Body must include csv text with columns: title, company, link, salary, jd (link and jd optional).",
       },
     });
   }

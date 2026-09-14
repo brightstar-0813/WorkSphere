@@ -449,7 +449,7 @@ export function HuntingFetchPage() {
             <label className="field">
               <span>{t("hunting.fetch.jdLink")}</span>
               <input
-                type="url"
+                type="text"
                 value={link}
                 onChange={(e) => setLink(e.target.value)}
                 placeholder={t("hunting.fetch.urlPlaceholder")}
@@ -479,6 +479,7 @@ export function HuntingFetchPage() {
               rows={6}
               disabled={saving}
             />
+            <span className="muted small">{t("hunting.fetch.jdOptionalHint")}</span>
           </label>
 
           <div className="row-actions">
