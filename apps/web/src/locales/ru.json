@@ -555,6 +555,7 @@
       "confirmRemoveBody": "Удалить «{{label}}» и синхронизированные события.",
       "addedTitle": "URL календаря добавлен",
       "addedBody": "События синхронизированы из ICS",
+      "syncedBody": "Импортированные календари обновлены",
       "errorTitle": "Ошибка ICS",
       "errorBody": "Нужна рабочая ICS-ссылка (для Google — секретный адрес, не public)"
     },

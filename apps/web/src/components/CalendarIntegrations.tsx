@@ -6,6 +6,8 @@ import { CalCollapse } from "./CalCollapse";
 
 type Props = {
   onSynced?: () => void;
+  /** Visible calendar range — used when syncing so new events in view are pulled. */
+  syncRange?: { from: Date; to: Date };
 };
 
 function hostnameFromUrl(url: string) {
@@ -16,10 +18,11 @@ function hostnameFromUrl(url: string) {
   }
 }
 
-export function CalendarIntegrations({ onSynced }: Props) {
+export function CalendarIntegrations({ onSynced, syncRange }: Props) {
   const { t } = useTranslation();
   const { notify } = useAlerts();
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [icsUrl, setIcsUrl] = useState("");
   const [icsLabel, setIcsLabel] = useState("");
   const [feedCount, setFeedCount] = useState(0);
@@ -72,6 +75,43 @@ export function CalendarIntegrations({ onSynced }: Props) {
     }
   }
 
+  async function syncAll() {
+    setSyncing(true);
+    try {
+      const padMs = 7 * 86400000;
+      const from = syncRange
+        ? new Date(syncRange.from.getTime() - padMs)
+        : undefined;
+      const to = syncRange
+        ? new Date(syncRange.to.getTime() + padMs)
+        : undefined;
+      await api("/integrations/calendar/sync", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "ALL",
+          ...(from && to
+            ? { from: from.toISOString(), to: to.toISOString() }
+            : {}),
+        }),
+      });
+      await refreshCount();
+      onSynced?.();
+      notify({
+        title: t("calendar.integrations.syncedTitle"),
+        body: t("calendar.ics.syncedBody"),
+        tone: "success",
+      });
+    } catch (err) {
+      notify({
+        title: t("calendar.ics.errorTitle"),
+        body: err instanceof Error ? err.message : t("calendar.ics.errorBody"),
+        tone: "danger",
+      });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="cal-integrations">
       <CalCollapse
@@ -89,7 +129,7 @@ export function CalendarIntegrations({ onSynced }: Props) {
             value={icsUrl}
             onChange={(e) => setIcsUrl(e.target.value)}
             placeholder={t("calendar.ics.urlPlaceholder")}
-            disabled={busy}
+            disabled={busy || syncing}
             required
             autoComplete="off"
           />
@@ -98,13 +138,25 @@ export function CalendarIntegrations({ onSynced }: Props) {
             value={icsLabel}
             onChange={(e) => setIcsLabel(e.target.value)}
             placeholder={t("calendar.ics.labelPlaceholder")}
-            disabled={busy}
+            disabled={busy || syncing}
             autoComplete="off"
           />
-          <button type="submit" className="btn primary" disabled={busy}>
+          <button type="submit" className="btn primary" disabled={busy || syncing}>
             {t("calendar.ics.add")}
           </button>
         </form>
+        {feedCount > 0 ? (
+          <div className="cal-ics-actions" style={{ marginTop: "0.75rem" }}>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || syncing}
+              onClick={() => void syncAll()}
+            >
+              {syncing ? t("common.loading") : t("calendar.integrations.syncNow")}
+            </button>
+          </div>
+        ) : null}
       </CalCollapse>
     </div>
   );

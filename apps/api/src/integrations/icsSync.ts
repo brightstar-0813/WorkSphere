@@ -1,5 +1,5 @@
 import { prisma } from "../prisma.js";
-import { normalizeCalendarUrl, parseIcsEvents } from "./icsParse.js";
+import { icsEventExternalId, normalizeCalendarUrl, parseIcsEvents } from "./icsParse.js";
 
 function isGoogleCalendarUrl(url: string) {
   try {
@@ -28,6 +28,14 @@ const ICS_COLOR_PALETTE = [
   "#0e7490",
   "#7c3aed",
 ] as const;
+
+function defaultSyncWindow() {
+  const from = new Date();
+  from.setMonth(from.getMonth() - 1);
+  const to = new Date();
+  to.setMonth(to.getMonth() + 3);
+  return { from, to };
+}
 
 function defaultLabelForUrl(url: string, label?: string) {
   const trimmed = label?.trim();
@@ -66,14 +74,22 @@ export async function syncIcsFeed(userId: string, feedId: string, from?: Date, t
   });
   if (!feed) throw new Error("ICS feed not found");
 
+  const window =
+    from && to && !Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())
+      ? { from, to }
+      : defaultSyncWindow();
+
   const sourceType = sourceTypeForUrl(feed.url);
   const res = await fetch(feed.url, {
     headers: {
       Accept: "text/calendar, text/plain, */*",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
       "User-Agent":
         "Mozilla/5.0 (compatible; WorkSphere/1.0; +https://localhost) AppleWebKit/537.36",
     },
     redirect: "follow",
+    cache: "no-store",
   });
   if (!res.ok) {
     throw new Error(fetchErrorMessage(feed.url, res.status));
@@ -81,21 +97,21 @@ export async function syncIcsFeed(userId: string, feedId: string, from?: Date, t
   const raw = await res.text();
   if (!/BEGIN:VCALENDAR/i.test(raw)) {
     throw new Error(
-      "URL did not return an ICS calendar. Paste the secret/public .ics link, not a calendar web page."
+      "URL did not return an ICS calendar. Paste the secret/public .ics link, not a calendar web page.",
     );
   }
   let events = parseIcsEvents(raw);
 
-  if (from && to) {
-    events = events.filter((ev) => {
-      const end = ev.endsAt || ev.startsAt;
-      return end >= from && ev.startsAt <= to;
-    });
-  }
+  events = events.filter((ev) => {
+    const end = ev.endsAt || ev.startsAt;
+    return end >= window.from && ev.startsAt <= window.to;
+  });
 
+  const seenExternalIds = new Set<string>();
   let upserted = 0;
   for (const ev of events) {
-    const externalId = `${feed.id}:${ev.uid}`;
+    const externalId = icsEventExternalId(feed.id, ev);
+    seenExternalIds.add(externalId);
     await prisma.calendarEvent.upsert({
       where: {
         userId_sourceType_externalId: {
@@ -127,10 +143,24 @@ export async function syncIcsFeed(userId: string, feedId: string, from?: Date, t
         allDay: ev.allDay,
         description: ev.description,
         htmlLink: feed.url,
+        sourceId: feed.id,
       },
     });
     upserted += 1;
   }
+
+  // Drop stale/cancelled copies in this window (including legacy feedId:uid keys).
+  await prisma.calendarEvent.deleteMany({
+    where: {
+      userId,
+      sourceType,
+      sourceId: feed.id,
+      startsAt: { gte: window.from, lte: window.to },
+      ...(seenExternalIds.size > 0
+        ? { externalId: { notIn: [...seenExternalIds] } }
+        : {}),
+    },
+  });
 
   await prisma.calendarIcsFeed.update({
     where: { id: feed.id },

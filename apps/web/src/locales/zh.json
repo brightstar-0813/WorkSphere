@@ -555,6 +555,7 @@
       "confirmRemoveBody": "删除“{{label}}”及其同步事件。",
       "addedTitle": "已添加日历 URL",
       "addedBody": "已从 ICS 同步",
+      "syncedBody": "已更新导入的日历",
       "errorTitle": "ICS 失败",
       "errorBody": "请确认是有效的 ICS 链接（Google 请用私密地址，除非日历已公开）"
     },

@@ -578,6 +578,7 @@
       "confirmRemoveBody": "Delete “{{label}}” and its synced events from WorkSphere.",
       "addedTitle": "Calendar URL added",
       "addedBody": "Events synced from ICS",
+      "syncedBody": "Imported calendars updated",
       "errorTitle": "ICS failed",
       "errorBody": "Check the URL is a valid ICS feed (Google: use Secret address, not public unless shared)"
     },

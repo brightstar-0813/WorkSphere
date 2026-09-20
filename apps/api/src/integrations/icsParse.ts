@@ -2,11 +2,14 @@ import { resolveIanaTimeZone, wallTimeToUtc } from "./tzWallTime.js";
 
 export type ParsedIcsEvent = {
   uid: string;
+  /** Distinguishes recurring instances that share a UID */
+  recurrenceId: string | null;
   title: string;
   description: string;
   startsAt: Date;
   endsAt: Date | null;
   allDay: boolean;
+  status: string;
 };
 
 function unfoldIcs(raw: string): string {
@@ -24,7 +27,7 @@ function unescapeIcs(value: string): string {
 function tzidFromParams(params: string): string | null {
   const match = params.match(/TZID=([^;]+)/i);
   if (!match) return null;
-  return match[1].trim().replace(/^"|"$/g, "");
+  return match[1]!.trim().replace(/^"|"$/g, "");
 }
 
 /** Parse ICS date: YYYYMMDD or YYYYMMDDTHHMMSS(Z) with optional TZID. */
@@ -95,18 +98,23 @@ export function parseIcsEvents(raw: string): ParsedIcsEvent[] {
   let uid = "";
   let title = "";
   let description = "";
+  let status = "";
+  let recurrenceId: string | null = null;
   let starts: { date: Date; allDay: boolean } | null = null;
   let ends: { date: Date; allDay: boolean } | null = null;
 
   function flush() {
     if (!uid || !starts) return;
+    if (/^cancelled$/i.test(status.trim())) return;
     events.push({
       uid,
+      recurrenceId,
       title: title || "(No title)",
       description,
       startsAt: starts.date,
       endsAt: ends?.date ?? null,
       allDay: starts.allDay,
+      status: status || "CONFIRMED",
     });
   }
 
@@ -117,6 +125,8 @@ export function parseIcsEvents(raw: string): ParsedIcsEvent[] {
       uid = "";
       title = "";
       description = "";
+      status = "";
+      recurrenceId = null;
       starts = null;
       ends = null;
       continue;
@@ -132,7 +142,11 @@ export function parseIcsEvents(raw: string): ParsedIcsEvent[] {
     if (prop.name === "UID") uid = unescapeIcs(prop.value).trim();
     else if (prop.name === "SUMMARY") title = unescapeIcs(prop.value).trim();
     else if (prop.name === "DESCRIPTION") description = unescapeIcs(prop.value).trim();
-    else if (prop.name === "DTSTART") starts = parseIcsDate(prop.value, prop.params);
+    else if (prop.name === "STATUS") status = unescapeIcs(prop.value).trim();
+    else if (prop.name === "RECURRENCE-ID") {
+      const parsed = parseIcsDate(prop.value, prop.params);
+      recurrenceId = parsed ? parsed.date.toISOString() : unescapeIcs(prop.value).trim() || null;
+    } else if (prop.name === "DTSTART") starts = parseIcsDate(prop.value, prop.params);
     else if (prop.name === "DTEND") ends = parseIcsDate(prop.value, prop.params);
   }
 
@@ -145,4 +159,13 @@ export function normalizeCalendarUrl(input: string): string {
     url = `https://${url.slice("webcal://".length)}`;
   }
   return url;
+}
+
+/** Stable external id so same-UID recurring instances do not overwrite each other. */
+export function icsEventExternalId(
+  feedId: string,
+  ev: Pick<ParsedIcsEvent, "uid" | "recurrenceId" | "startsAt">,
+): string {
+  const instance = ev.recurrenceId || ev.startsAt.toISOString();
+  return `${feedId}:${ev.uid}:${instance}`;
 }

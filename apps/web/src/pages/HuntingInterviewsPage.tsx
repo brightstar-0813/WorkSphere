@@ -212,7 +212,11 @@ export function HuntingInterviewsPage() {
     if (!linkedFeedId) return;
     setSyncing(true);
     try {
-      await api(`/integrations/calendar/ics/${linkedFeedId}/sync`, { method: "POST" });
+      // Omit from/to so the API uses the default −1 / +3 month ICS window.
+      await api(`/integrations/calendar/ics/${linkedFeedId}/sync`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
       setReloadToken((n) => n + 1);
     } finally {
       setSyncing(false);

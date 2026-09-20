@@ -353,10 +353,18 @@ integrationsRouter.post("/calendar/sync", requireAuth, async (req, res) => {
 
   const from = parsed.data.from
     ? new Date(parsed.data.from)
-    : new Date(Date.now() - 7 * 86400000);
+    : (() => {
+        const d = new Date();
+        d.setMonth(d.getMonth() - 1);
+        return d;
+      })();
   const to = parsed.data.to
     ? new Date(parsed.data.to)
-    : new Date(Date.now() + 60 * 86400000);
+    : (() => {
+        const d = new Date();
+        d.setMonth(d.getMonth() + 3);
+        return d;
+      })();
 
   const results: Record<string, number> = {};
 
@@ -388,13 +396,12 @@ integrationsRouter.post("/calendar/sync", requireAuth, async (req, res) => {
       results[provider] = await syncExternalCalendar(req.user!.id, provider, from, to);
     }
 
-    if (parsed.data.provider === "ALL" || parsed.data.provider === "OUTLOOK") {
-      const ics = await syncAllIcsFeeds(req.user!.id, from, to);
-      Object.assign(
-        results,
-        Object.fromEntries(Object.entries(ics).map(([k, v]) => [`ICS:${k}`, v]))
-      );
-    }
+    // Always pull imported ICS feeds (Google + Outlook URLs) on any bulk sync.
+    const ics = await syncAllIcsFeeds(req.user!.id, from, to);
+    Object.assign(
+      results,
+      Object.fromEntries(Object.entries(ics).map(([k, v]) => [`ICS:${k}`, v]))
+    );
   }
 
   return res.json({ data: { synced: results } });
@@ -403,13 +410,13 @@ integrationsRouter.post("/calendar/sync", requireAuth, async (req, res) => {
 integrationsRouter.post("/calendar/ics/:id/sync", requireAuth, async (req, res) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0]! : req.params.id;
   const from =
-    typeof req.body?.from === "string"
+    typeof req.body?.from === "string" && req.body.from
       ? new Date(req.body.from)
-      : new Date(Date.now() - 7 * 86400000);
+      : undefined;
   const to =
-    typeof req.body?.to === "string"
+    typeof req.body?.to === "string" && req.body.to
       ? new Date(req.body.to)
-      : new Date(Date.now() + 60 * 86400000);
+      : undefined;
   try {
     const synced = await syncIcsFeed(req.user!.id, id, from, to);
     return res.json({ data: { synced } });

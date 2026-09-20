@@ -1,4 +1,4 @@
-import { CSSProperties, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
@@ -468,9 +468,34 @@ export function CalendarPage() {
     return { from: startOfZonedDay(cursor, timeZone), to: endOfZonedDay(cursor, timeZone) };
   }, [cursor, view, timeZone]);
 
+  const lastIcsSyncAtRef = useRef(0);
+
+  async function maybeSyncIcsFeeds() {
+    if (icsFeeds.length === 0) return;
+    const now = Date.now();
+    // Throttle automatic pull so month/week navigation stays responsive.
+    if (now - lastIcsSyncAtRef.current < 60_000) return;
+    lastIcsSyncAtRef.current = now;
+    const padMs = 7 * 86400000;
+    try {
+      await api("/integrations/calendar/sync", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "ALL",
+          from: new Date(range.from.getTime() - padMs).toISOString(),
+          to: new Date(range.to.getTime() + padMs).toISOString(),
+        }),
+      });
+    } catch {
+      /* best-effort — still show whatever is already in DB */
+    }
+  }
+
   async function load() {
     setLoading(true);
     try {
+      await maybeSyncIcsFeeds();
+
       const jobIds = jobLayers.filter((j) => enabled[j.id] !== false).map((j) => j.entityId);
       const profileIds = profileLayers
         .filter((p) => enabled[p.id] !== false)
@@ -797,7 +822,9 @@ export function CalendarPage() {
           />
 
           <CalendarIntegrations
+            syncRange={range}
             onSynced={() => {
+              lastIcsSyncAtRef.current = 0;
               void refreshIcsFeeds();
               void refreshShares();
               void load();
