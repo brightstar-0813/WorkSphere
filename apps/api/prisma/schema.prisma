@@ -85,6 +85,12 @@ enum LinkedType {
   NONE
 }
 
+enum TranscriptStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum JobDayItemStatus {
   TODO
   IN_PROGRESS
@@ -130,6 +136,7 @@ model User {
   calendarIcsFeeds    CalendarIcsFeed[]
   shareRequestsSent     CalendarShare[] @relation("ShareRequester")
   shareRequestsReceived CalendarShare[] @relation("ShareOwner")
+  transcripts   Transcript[]
 }
 
 /** Singleton workspace metadata for the shared Job file CSV upload. */
@@ -562,4 +569,40 @@ model ChatMessageReaction {
   @@unique([messageId, userId, emoji])
   @@index([messageId])
   @@index([userId])
+}
+
+/**
+ * Tools → Transcript. Media is transcribed in the browser (Whisper via ONNX),
+ * so only the finished text, speaker turns and job metadata reach the server.
+ */
+model Transcript {
+  id           String           @id @default(cuid())
+  userId       String
+  title        String
+  sourceName   String           @default("")
+  mimeType     String           @default("")
+  sizeBytes    Int              @default(0)
+  durationSec  Float            @default(0)
+  language     String           @default("")
+  modelId      String           @default("")
+  engine       String           @default("browser-whisper")
+  status       TranscriptStatus @default(PROCESSING)
+  progress     Int              @default(0)
+  errorMessage String           @default("")
+  /** Clean speaker-labelled transcript, ready to copy. */
+  text         String           @default("")
+  /** [{ speaker: "S1", text: "..." }] — paragraph turns, no timestamps. */
+  segments     Json?
+  /** { "S1": "Alice" } — user-assigned display names for detected speakers. */
+  speakerNames Json?
+  speakerCount Int              @default(0)
+  wordCount    Int              @default(0)
+  notes        String           @default("")
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, status])
 }

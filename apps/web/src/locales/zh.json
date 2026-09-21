@@ -26,7 +26,9 @@
     "discuss": "讨论",
     "reports": "报表",
     "admin": "管理",
-    "logout": "退出"
+    "logout": "退出",
+    "tools": "工具",
+    "toolsTranscript": "转录"
   },
   "auth": {
     "login": "登录",
@@ -825,5 +827,88 @@
     "password": "密码",
     "changePassword": "修改密码",
     "passwordChanged": "密码已更新"
+  },
+  "tools": {
+    "transcript": {
+      "title": "转录",
+      "subtitle": "把录音转成干净、带发言人标记的文字稿。全部在浏览器中完成——文件不会上传。",
+      "upload": "新建转录",
+      "intakeTitle": "新建转录",
+      "privacyNote": "音频在本设备上解码并转录，只有最终文本会保存到 WorkSphere。",
+      "dropHere": "把录音拖到这里",
+      "formats": "MP4、WebM、MOV、MKV、MP3、M4A、WAV、OGG、FLAC",
+      "chooseFile": "选择文件",
+      "model": "模型",
+      "models": {
+        "tiny": "Tiny — 最快",
+        "base": "Base — 均衡",
+        "small": "Small — 更准确",
+        "turbo": "Large v3 Turbo — 最佳（WebGPU）"
+      },
+      "language": "口语语言",
+      "auto": "自动识别",
+      "languages": {
+        "en": "英语",
+        "zh": "中文",
+        "ru": "俄语",
+        "ja": "日语",
+        "ko": "韩语",
+        "es": "西班牙语",
+        "fr": "法语",
+        "de": "德语",
+        "pt": "葡萄牙语",
+        "hi": "印地语",
+        "ar": "阿拉伯语"
+      },
+      "detectSpeakers": "识别发言人",
+      "maxSpeakers": "预计发言人数",
+      "livePreview": "实时预览",
+      "stage": {
+        "load": "加载模型",
+        "diarize": "识别发言人",
+        "transcribe": "转录中"
+      },
+      "device": {
+        "webgpu": "GPU 加速",
+        "wasm": "CPU"
+      },
+      "searchPlaceholder": "搜索转录",
+      "statusFilter": "按状态筛选",
+      "statusAll": "全部状态",
+      "status": {
+        "PROCESSING": "处理中",
+        "COMPLETED": "已完成",
+        "FAILED": "失败"
+      },
+      "emptyList": "还没有转录。拖入一个录音开始吧。",
+      "speakerCount": "{{count}} 位发言人",
+      "speakerN": "发言人 {{n}}",
+      "speakersTitle": "发言人",
+      "speakersHint": "重命名发言人后，转录全文会同步更新。",
+      "renameTranscript": "转录标题",
+      "copy": "复制",
+      "copied": "已复制转录",
+      "copyFailed": "无法复制到剪贴板",
+      "downloadTxt": "下载 .txt",
+      "downloadMd": "下载 .md",
+      "notes": "备注",
+      "done": "转录完成",
+      "deleted": "已删除转录",
+      "deleteTitle": "删除该转录？",
+      "deleteMessage": "转录内容及发言人名称将被永久删除。",
+      "stillRunning": "该转录仍在处理中。",
+      "metaSource": "源文件",
+      "metaDuration": "时长",
+      "metaSize": "大小",
+      "metaWords": "字数",
+      "metaSpeakers": "发言人",
+      "metaCreated": "创建时间",
+      "decodeError": {
+        "decode": "浏览器无法解码该文件。请尝试 MP4、WebM、MP3 或 WAV，或重新导出录音。",
+        "tooLong": "录音超过 4 小时，请先分割成较短的片段。",
+        "noAudio": "该文件中未找到音轨。",
+        "unsupported": "此浏览器不支持页面内音频解码。"
+      }
+    }
   }
 }

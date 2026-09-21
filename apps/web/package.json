@@ -4,11 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "copy:ort": "node scripts/copy-ort.mjs",
+    "predev": "npm run copy:ort",
     "dev": "vite",
+    "prebuild": "npm run copy:ort",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "i18next": "^25.5.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

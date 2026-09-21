@@ -74,6 +74,31 @@ WorkSphere can sync events from Google Calendar and Microsoft Outlook and send i
 
 Without OAuth keys, **Add account** stays disabled; ICS URL import still works.
 
+## Tools → Transcript
+
+**Sidebar → Tools → Transcript** turns a recording into a clean, speaker-labelled
+transcript with no timestamps.
+
+- Input: MP4, WebM, MOV, MKV, MP3, M4A, WAV, OGG, FLAC — anything the browser can decode
+- Speech recognition: Whisper via ONNX (`@huggingface/transformers`), WebGPU when available, CPU/WASM otherwise
+- Speaker labels: `pyannote/segmentation-3.0`; rename a speaker and the name updates everywhere
+- Output: speaker-grouped paragraphs, copy to clipboard or download as `.txt` / `.md`
+
+**No API keys, no per-minute cost, and nothing uploaded** — decoding and transcription
+run in a Web Worker on the user's own machine, and only the finished text reaches the
+API. Transcripts are private per user (ADMIN can scope with `?userId=`).
+
+Model weights (~45 MB for Tiny up to ~820 MB for Large v3 Turbo) download from the
+Hugging Face CDN on first use and are then cached by the browser. Transcription speed
+depends on the machine: WebGPU is roughly real-time, CPU/WASM is several times slower,
+so prefer Tiny or Base without a GPU.
+
+The ONNX runtime itself is served from this app. `apps/web/scripts/copy-ort.mjs`
+vendors it into `apps/web/src/vendor/ort` on `predev` / `prebuild` (gitignored), which
+also puts a ~21 MB `.wasm` in `apps/web/dist`. Keep that step — without it
+transformers.js falls back to a jsdelivr CDN and the tool fails with
+`no available backend found` anywhere that CDN is unreachable.
+
 ## Later
 
 ## Deploy (free): Neon + Render + Vercel

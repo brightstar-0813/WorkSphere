@@ -21,6 +21,7 @@ import { HuntingProgressPage } from "./pages/HuntingProgressPage";
 import { CalendarPage } from "./pages/CalendarPage";
 import { MoneyPage } from "./pages/MoneyPage";
 import { DiscussPage } from "./pages/DiscussPage";
+import { ToolsTranscriptPage } from "./pages/ToolsTranscriptPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { ProfilePage } from "./pages/ProfilePage";
 
@@ -61,6 +62,12 @@ const NAV: readonly NavItem[] = [
   { to: "/reports", key: "nav.reports", icon: "▴" },
   { to: "/money", key: "nav.money", icon: "＄" },
   { to: "/discuss", key: "nav.discuss", icon: "☰" },
+  {
+    to: "/tools",
+    key: "nav.tools",
+    icon: "⚒",
+    children: [{ to: "/tools/transcript", key: "nav.toolsTranscript" }],
+  },
   { to: "/admin", key: "nav.admin", icon: "★", adminOnly: true },
 ];
 
@@ -181,6 +188,8 @@ function Shell() {
             <Route path="/calendar" element={<CalendarPage />} />
             <Route path="/money" element={<MoneyPage />} />
             <Route path="/discuss" element={<DiscussPage />} />
+            <Route path="/tools" element={<Navigate to="/tools/transcript" replace />} />
+            <Route path="/tools/transcript" element={<ToolsTranscriptPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             {isAdmin ? (

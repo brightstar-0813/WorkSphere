@@ -10,6 +10,7 @@ import { calendarSharesRouter } from "./routes/calendarShares.js";
 import { transactionsRouter } from "./routes/transactions.js";
 import { discussionsRouter } from "./routes/discussions.js";
 import { chatRouter } from "./routes/chat.js";
+import { transcriptsRouter } from "./routes/transcripts.js";
 import { reportsRouter } from "./routes/reports.js";
 import { adminRouter } from "./routes/admin.js";
 import { integrationsRouter } from "./routes/integrations.js";
@@ -36,6 +37,7 @@ app.use("/api/v1/integrations", integrationsRouter);
 app.use("/api/v1/transactions", transactionsRouter);
 app.use("/api/v1/discussions", discussionsRouter);
 app.use("/api/v1/chat", chatRouter);
+app.use("/api/v1/tools/transcripts", transcriptsRouter);
 app.use("/api/v1/reports", reportsRouter);
 app.use("/api/v1/admin", adminRouter);
 

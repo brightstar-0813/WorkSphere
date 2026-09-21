@@ -26,7 +26,9 @@
     "discuss": "Discuss",
     "reports": "Reports",
     "admin": "Admin",
-    "logout": "Log out"
+    "logout": "Log out",
+    "tools": "Tools",
+    "toolsTranscript": "Transcript"
   },
   "auth": {
     "login": "Log in",
@@ -848,5 +850,89 @@
     "password": "Password",
     "changePassword": "Change password",
     "passwordChanged": "Password updated"
+  },
+  "tools": {
+    "transcript": {
+      "title": "Transcript",
+      "subtitle": "Turn a recording into a clean, speaker-labelled transcript. Everything runs in your browser — the file is never uploaded.",
+      "upload": "New transcript",
+      "intakeTitle": "New transcript",
+      "privacyNote": "Audio is decoded and transcribed on this device. Only the finished text is saved to WorkSphere.",
+      "dropHere": "Drop a recording here",
+      "formats": "MP4, WebM, MOV, MKV, MP3, M4A, WAV, OGG, FLAC",
+      "chooseFile": "Choose file",
+      "model": "Model",
+      "models": {
+        "tiny": "Tiny — fastest",
+        "base": "Base — balanced",
+        "small": "Small — accurate",
+        "turbo": "Large v3 Turbo — best (WebGPU)"
+      },
+      "language": "Spoken language",
+      "auto": "Detect automatically",
+      "languages": {
+        "en": "English",
+        "zh": "Chinese",
+        "ru": "Russian",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "pt": "Portuguese",
+        "hi": "Hindi",
+        "ar": "Arabic"
+      },
+      "detectSpeakers": "Detect speakers",
+      "maxSpeakers": "Speakers expected",
+      "livePreview": "Live preview",
+      "stage": {
+        "load": "Loading model",
+        "diarize": "Detecting speakers",
+        "transcribe": "Transcribing"
+      },
+      "device": {
+        "webgpu": "GPU accelerated",
+        "wasm": "CPU"
+      },
+      "searchPlaceholder": "Search transcripts",
+      "statusFilter": "Filter by status",
+      "statusAll": "All statuses",
+      "status": {
+        "PROCESSING": "Processing",
+        "COMPLETED": "Ready",
+        "FAILED": "Failed"
+      },
+      "emptyList": "No transcripts yet. Drop a recording to make the first one.",
+      "speakerCount": "{{count}} speaker",
+      "speakerCount_other": "{{count}} speakers",
+      "speakerN": "Speaker {{n}}",
+      "speakersTitle": "Speakers",
+      "speakersHint": "Rename a speaker and it updates everywhere in the transcript.",
+      "renameTranscript": "Transcript title",
+      "copy": "Copy",
+      "copied": "Transcript copied",
+      "copyFailed": "Could not copy to the clipboard",
+      "downloadTxt": "Download .txt",
+      "downloadMd": "Download .md",
+      "notes": "Notes",
+      "done": "Transcript ready",
+      "deleted": "Transcript deleted",
+      "deleteTitle": "Delete transcript?",
+      "deleteMessage": "The transcript and its speaker names are removed permanently.",
+      "stillRunning": "This transcript is still being processed.",
+      "metaSource": "Source file",
+      "metaDuration": "Duration",
+      "metaSize": "Size",
+      "metaWords": "Words",
+      "metaSpeakers": "Speakers",
+      "metaCreated": "Created",
+      "decodeError": {
+        "decode": "This browser could not decode that file. Try MP4, WebM, MP3 or WAV, or re-export the recording.",
+        "tooLong": "That recording is longer than 4 hours. Split it into shorter parts first.",
+        "noAudio": "No audio track was found in that file.",
+        "unsupported": "This browser does not support in-page audio decoding."
+      }
+    }
   }
 }
