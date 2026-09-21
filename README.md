@@ -185,6 +185,26 @@ If Vercel’s monorepo install fails, set **Root Directory** to the repo root an
 
 Locally, leave `VITE_API_URL` unset so Vite’s `/api` proxy still works.
 
+### Shipping a change
+
+Neither host deploys from GitHub — a push does **not** ship anything. Deploy
+both from the repo root:
+
+```bash
+npm run deploy        # API (Railway) then web (Vercel), in that order
+```
+
+Or one at a time: `npm run deploy:api`, `npm run deploy:web`.
+
+Order matters. The API carries the Prisma migration (`start:prod` runs
+`prisma migrate deploy` on boot), so shipping the web app first leaves the
+frontend calling routes the API does not have yet.
+
+Run these from the repo root, not `apps/web` — `deploy:web` passes
+`--cwd apps/web` itself. Running `vercel --prod` from the root by hand fails
+with `No Output Directory named "dist"`, because the project Root Directory is
+relative to the linked `apps/web` folder.
+
 ### After deploy
 
 - Share the Vercel URL with other users  
