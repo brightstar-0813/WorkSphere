@@ -187,70 +187,156 @@ async function postSheetWebApp(webAppUrl: string, payload: Record<string, unknow
   return parsed || { ok: true };
 }
 
-export async function fetchSheetJobRows(config: SheetConfig): Promise<SheetJobRow[]> {
-  const spreadsheetId = extractSpreadsheetId(config.spreadsheetUrl);
-  if (!spreadsheetId) throw new Error("Invalid Google Spreadsheet link.");
-
-  const parsed = await postSheetWebApp(config.sheetsWebAppUrl, sheetPayload(config, {
-    action: "listRows",
-    spreadsheetId,
-  }));
-
-  // Older Apps Script treated unknown actions as append — that wrote blank Ready rows.
-  // Never treat an append-shaped response as a successful list.
-  if (
+/** Older Apps Script treated unknown actions as append and returned these flags (no rows). */
+function isAppendShapedResponse(parsed: Record<string, unknown>): boolean {
+  return (
     !Array.isArray(parsed.rows) &&
     (parsed.duplicate === true ||
       parsed.duplicate === false ||
       parsed.appended === true ||
       parsed.updated === true)
-  ) {
-    throw new Error(
-      "Apps Script web app is missing listRows (redeploy apps-script/Code.gs from Brightstar Bid bot). Sync was aborted so blank Ready rows are not appended."
-    );
-  }
+  );
+}
 
-  // Fallback for older Apps Script deployments that return listLinks-only payloads
-  if (!Array.isArray(parsed.rows)) {
-    const legacy = await postSheetWebApp(config.sheetsWebAppUrl, sheetPayload(config, {
-      action: "listLinks",
-      spreadsheetId,
-    }));
-    const linkStatuses = Array.isArray(legacy.linkStatuses)
-      ? (legacy.linkStatuses as Array<{ link?: string; status?: string }>)
-      : [];
-    const companyRows = Array.isArray(legacy.companyRows)
-      ? (legacy.companyRows as Array<{ company?: string; link?: string }>)
-      : [];
-    const companyByLink = new Map(
-      companyRows.map((r) => [normalizeJobLink(String(r.link || "")), String(r.company || "")])
-    );
-    return linkStatuses
-      .map((row) => {
-        const link = String(row.link || "").trim();
-        return {
-          title: "",
-          company: companyByLink.get(normalizeJobLink(link)) || "",
-          link,
-          salary: "",
-          status: String(row.status || "").trim(),
-        };
-      })
-      .filter((r) => isMeaningfulSheetJobRow(r));
-  }
+function hasListPayload(parsed: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(parsed.rows) ||
+    Array.isArray(parsed.linkStatuses) ||
+    Array.isArray(parsed.links) ||
+    Array.isArray(parsed.companyRows)
+  );
+}
 
-  return (parsed.rows as SheetJobRow[])
-    .map((row) => ({
-      row: row.row,
-      jobNo: String(row.jobNo || "").trim(),
-      date: String(row.date || "").trim(),
-      title: String(row.title || "").trim(),
-      company: String(row.company || "").trim(),
-      link: String(row.link || "").trim(),
-      salary: String(row.salary || "").trim(),
-      status: String(row.status || "").trim(),
-    }))
+function advertisesListRows(parsed: Record<string, unknown>): boolean {
+  if (parsed.supportsListRows === true) return true;
+  const caps = parsed.capabilities;
+  if (Array.isArray(caps) && caps.some((c) => String(c).toLowerCase() === "listrows")) {
+    return true;
+  }
+  // Some deployments return full rows from listLinks itself.
+  return Array.isArray(parsed.rows);
+}
+
+/** Normalize partial sheet rows — missing title/company/link/salary/date are fine. */
+export function normalizeSheetJobRows(rows: unknown[]): SheetJobRow[] {
+  return rows
+    .map((raw) => {
+      const row = (raw && typeof raw === "object" ? raw : {}) as Partial<SheetJobRow> &
+        Record<string, unknown>;
+      const rowNum = row.row;
+      return {
+        row: typeof rowNum === "number" && Number.isFinite(rowNum) ? rowNum : undefined,
+        jobNo: String(row.jobNo ?? row.no ?? "").trim(),
+        date: String(row.date ?? row.createdDate ?? row.applicationDate ?? "").trim(),
+        title: String(row.title ?? row.jobTitle ?? row.role ?? "").trim(),
+        company: String(row.company ?? row.companyName ?? "").trim(),
+        link: String(row.link ?? row.jobLink ?? row.url ?? "").trim(),
+        salary: String(row.salary ?? row.pay ?? row.compensation ?? "").trim(),
+        status: String(row.status ?? row.applyStatus ?? "").trim(),
+      };
+    })
     .filter((r) => isMeaningfulSheetJobRow(r));
+}
+
+function rowsFromListLinksPayload(legacy: Record<string, unknown>): SheetJobRow[] {
+  if (Array.isArray(legacy.rows)) {
+    return normalizeSheetJobRows(legacy.rows);
+  }
+
+  type LinkStatusRow = {
+    link?: string;
+    status?: string;
+    title?: string;
+    company?: string;
+    salary?: string;
+    date?: string;
+    row?: number;
+  };
+  const linkStatuses: LinkStatusRow[] = Array.isArray(legacy.linkStatuses)
+    ? (legacy.linkStatuses as LinkStatusRow[])
+    : Array.isArray(legacy.links)
+      ? (legacy.links as unknown[]).map((item) =>
+          typeof item === "string" ? { link: item, status: "" } : (item as LinkStatusRow)
+        )
+      : [];
+  const companyRows = Array.isArray(legacy.companyRows)
+    ? (legacy.companyRows as Array<{ company?: string; link?: string; title?: string }>)
+    : [];
+  const companyByLink = new Map(
+    companyRows.map((r) => [normalizeJobLink(String(r.link || "")), String(r.company || "").trim()])
+  );
+  const titleByLink = new Map(
+    companyRows.map((r) => [normalizeJobLink(String(r.link || "")), String(r.title || "").trim()])
+  );
+
+  return normalizeSheetJobRows(
+    linkStatuses.map((row) => {
+      const link = String(row.link || "").trim();
+      const key = normalizeJobLink(link);
+      return {
+        row: row.row,
+        title: String(row.title || titleByLink.get(key) || "").trim(),
+        company: String(row.company || companyByLink.get(key) || "").trim(),
+        link,
+        salary: String(row.salary || "").trim(),
+        date: String(row.date || "").trim(),
+        status: String(row.status || "").trim(),
+      };
+    })
+  );
+}
+
+/**
+ * Fetch job rows from the bid-bot Apps Script web app.
+ * Uses listLinks first (safe on older deployments). Calls listRows only when the
+ * web app advertises support — avoids unknown-action → blank Ready appends.
+ * Missing columns/fields are tolerated; only empty placeholder rows are dropped.
+ */
+export async function fetchSheetJobRows(config: SheetConfig): Promise<SheetJobRow[]> {
+  const spreadsheetId = extractSpreadsheetId(config.spreadsheetUrl);
+  if (!spreadsheetId) throw new Error("Invalid Google Spreadsheet link.");
+
+  // 1) Safe read — Brightstar bid-bot scripts have long supported listLinks.
+  const legacy = await postSheetWebApp(
+    config.sheetsWebAppUrl,
+    sheetPayload(config, { action: "listLinks", spreadsheetId })
+  );
+
+  if (isAppendShapedResponse(legacy) && !hasListPayload(legacy)) {
+    throw new Error(
+      "Apps Script web app cannot list sheet rows (unknown actions fall through to append). Redeploy apps-script/Code.gs, then sync again."
+    );
+  }
+
+  // Prefer full rows already returned by listLinks (newer Code.gs).
+  if (Array.isArray(legacy.rows)) {
+    return normalizeSheetJobRows(legacy.rows);
+  }
+
+  // Call listRows only when advertised but rows were not included in listLinks.
+  if (advertisesListRows(legacy)) {
+    try {
+      const parsed = await postSheetWebApp(
+        config.sheetsWebAppUrl,
+        sheetPayload(config, { action: "listRows", spreadsheetId })
+      );
+      if (Array.isArray(parsed.rows)) {
+        return normalizeSheetJobRows(parsed.rows);
+      }
+      // Advertised but empty/malformed — fall through to listLinks payload.
+    } catch {
+      // Keep listLinks data so sync still succeeds with partial fields.
+    }
+  }
+
+  // Partial-field sync from listLinks (link/status/company; title/salary/date may be blank).
+  const fromLinks = rowsFromListLinksPayload(legacy);
+  if (fromLinks.length > 0 || hasListPayload(legacy)) {
+    return fromLinks;
+  }
+
+  // Empty sheet is a valid sync result.
+  return [];
 }
 
 export async function appendJobToSpreadsheet(

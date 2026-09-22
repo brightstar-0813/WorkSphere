@@ -205,7 +205,7 @@
     },
     "sheet": {
       "heading": "Google 表格（投标机器人）",
-      "hint": "所有档案共用同一 Brightstar Bid Tracking 表格与 Apps Script Web App；每个求职档案对应一个工作表标签（如 Lewis-SF、Edrwin-SF）。列：编号 | 创建日期 | 职位 | 公司 | 链接 | 薪资 | 申请状态。猎头直推职位可留空链接。需重新部署支持 sheetName + listRows 的脚本。",
+      "hint": "所有档案共用同一 Brightstar Bid Tracking 表格与 Apps Script Web App；每个求职档案对应一个工作表标签（如 Lewis-SF、Edrwin-SF）。列：编号 | 创建日期 | 职位 | 公司 | 链接 | 薪资 | 申请状态——缺列也可同步，有什么字段就用什么。猎头直推职位可留空链接。可选：重新部署 apps-script/Code.gs 以获取完整行字段。",
       "spreadsheetUrl": "表格链接",
       "webAppUrl": "Apps Script Web App URL",
       "tabName": "工作表标签（档案）",

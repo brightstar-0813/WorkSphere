@@ -229,7 +229,7 @@
     },
     "sheet": {
       "heading": "Google Sheet (bid bot)",
-      "hint": "Same Brightstar Bid Tracking spreadsheet + Apps Script web app for all profiles. Each hunting profile uses its own tab (e.g. Lewis-SF, Edrwin-SF). Columns: No | Created Date | Title | Company | Link | Salary | Apply Status. Link may be blank for recruiter-direct roles. Redeploy Apps Script with sheetName + listRows support.",
+      "hint": "Same Brightstar Bid Tracking spreadsheet + Apps Script web app for all profiles. Each hunting profile uses its own tab (e.g. Lewis-SF, Edrwin-SF). Columns: No | Created Date | Title | Company | Link | Salary | Apply Status — missing columns are fine; sync uses whatever fields exist. Link may be blank for recruiter-direct roles. Optional: redeploy apps-script/Code.gs for full row fields.",
       "spreadsheetUrl": "Spreadsheet URL",
       "webAppUrl": "Apps Script web app URL",
       "tabName": "Sheet tab (profile)",

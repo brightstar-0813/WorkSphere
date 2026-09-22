@@ -205,7 +205,7 @@
     },
     "sheet": {
       "heading": "Google Таблица (bid bot)",
-      "hint": "Один spreadsheet Brightstar Bid Tracking и Apps Script web app на все профили; у каждого hunting-профиля свой лист (например Lewis-SF, Edrwin-SF). Колонки: No | Created Date | Title | Company | Link | Salary | Apply Status. Ссылка может быть пустой для ролей от рекрутера. Переразверните скрипт с sheetName + listRows.",
+      "hint": "Один spreadsheet Brightstar Bid Tracking и Apps Script web app на все профили; у каждого hunting-профиля свой лист (например Lewis-SF, Edrwin-SF). Колонки: No | Created Date | Title | Company | Link | Salary | Apply Status — отсутствующие колонки допустимы; синхронизация берёт доступные поля. Ссылка может быть пустой для ролей от рекрутера. Опционально: переразверните apps-script/Code.gs для полных полей строк.",
       "spreadsheetUrl": "URL таблицы",
       "webAppUrl": "URL веб-приложения Apps Script",
       "tabName": "Вкладка листа (профиль)",
